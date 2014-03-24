@@ -3,7 +3,7 @@ import os
 import datetime
 from email.utils import parsedate
 import time
-from workflow import Workflow, PasswordNotFound
+from workflow import Workflow, PasswordNotFound, ICON_TRASH
 from dropbox import client, rest
 import config
 
@@ -13,7 +13,6 @@ def main(wf):
 
     try:
         wf.get_password('dropbox_access_token')
-        # user_input = '/.ws.agile.1Password.settings'
         file_or_folder = get_file_or_folder(user_input)
 
         if len(file_or_folder) > 0:
@@ -26,7 +25,7 @@ def main(wf):
                     wf.add_item(
                         'Save to Desktop', arg='desktop ' + f['path'], icon='icons/desktop.png', valid=True)
                     wf.add_item(
-                        'Delete', arg='delete ' + f['path'], valid=True)
+                        'Delete', arg='delete ' + f['path'], icon=ICON_TRASH, valid=True)
                 else:
                     title = os.path.basename(f['path'])
                     subtitle = 'Modified: ' + \
@@ -36,14 +35,14 @@ def main(wf):
                     if f['is_dir']:
                         title += '/'
                         wf.add_item(
-                            title, subtitle, icon=icon, autocomplete=f['path'], valid=False)
+                            title, subtitle, icon=icon, autocomplete=f['path'] + '/', valid=False)
                     else:
                         title += ' (' + f['size'] + ')'
                         wf.add_item(
                             title, subtitle, icon=icon, autocomplete=f['path'], valid=False)
         else:
             wf.add_item(
-                'Folder seems to be empty.', 'Try another one!', valid=False)
+                'No files were found.', 'Try a different request!', valid=False)
 
     except PasswordNotFound:
         wf.add_item(
@@ -54,21 +53,30 @@ def main(wf):
     wf.send_feedback()
 
 
-def get_file_or_folder(dir='/'):
+def get_file_or_folder(path='/'):
+    if len(path) > 1 and path[-1] == '/':
+        path = path[:-1]
     access_token = wf.get_password('dropbox_access_token')
     api_client = client.DropboxClient(access_token)
+    output = []
     try:
-        resp = api_client.metadata(dir)
-
-        output = []
+        resp = api_client.metadata(path, file_limit=100)
         if 'contents' in resp:
             output = resp['contents']
         else:
             output.append(resp)
+        wf.cache_data('last_path', path)
         wf.cache_data('last_output', output)
         return output
     except rest.ErrorResponse, e:
-        return wf.cached_data('last_output')
+        last_path = wf.cached_data('last_path')
+        if last_path in path:
+            query = path[len(last_path) + 1:]
+            log.debug(last_path)
+            log.debug(query)
+            output = api_client.search(last_path, query, file_limit=100)
+
+    return output
 
 
 def get_auth_url():
@@ -79,4 +87,5 @@ def get_auth_url():
 
 if __name__ == '__main__':
     wf = Workflow()
+    log = wf.logger
     sys.exit(wf.run(main))
