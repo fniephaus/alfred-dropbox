@@ -1,14 +1,10 @@
 import sys
 import os
-import datetime
-from dropbox import client, rest, session
-from workflow import Workflow, PasswordNotFound
-import argparse
 from AppKit import NSPasteboard, NSArray
 import webbrowser
-
-APP_KEY = 'aehc68b78l1x0xf'
-APP_SECRET = 'q864ds64e65550p'
+from workflow import Workflow
+from dropbox import client, rest
+import config
 
 
 def main(wf):

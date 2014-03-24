@@ -1,13 +1,11 @@
 import sys
 import os
 import datetime
-from dropbox import client, rest, session
-from workflow import Workflow, PasswordNotFound
 from email.utils import parsedate
 import time
-
-APP_KEY = 'aehc68b78l1x0xf'
-APP_SECRET = 'q864ds64e65550p'
+from workflow import Workflow, PasswordNotFound
+from dropbox import client, rest
+import config
 
 
 def main(wf):
