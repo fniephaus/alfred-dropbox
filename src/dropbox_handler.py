@@ -11,7 +11,7 @@ def main(wf):
     user_input = ''.join(wf.args)
 
     command = user_input.split()[0]
-    path = args.query[len(command) + 1:]
+    path = user_input[len(command) + 1:]
 
     if command == "share":
         return share_path(path)
@@ -92,8 +92,7 @@ def delete_path(path):
 
 def authorize(auth_code):
     flow = client.DropboxOAuth2FlowNoRedirect(
-        APP_KEY, APP_SECRET)
-
+        config.APP_KEY, config.APP_SECRET)
     try:
         access_token, user_id = flow.finish(auth_code)
         wf.save_password(
@@ -107,5 +106,4 @@ def authorize(auth_code):
 
 if __name__ == '__main__':
     wf = Workflow()
-    log = wf.logger
     sys.exit(wf.run(main))
