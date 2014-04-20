@@ -19,6 +19,17 @@
 				<string></string>
 			</dict>
 		</array>
+		<key>96CE9469-D48F-491F-8D8D-BFD154DB2783</key>
+		<array>
+			<dict>
+				<key>destinationuid</key>
+				<string>E037422F-BB78-4C52-9EC9-D23FCF6CA31A</string>
+				<key>modifiers</key>
+				<integer>0</integer>
+				<key>modifiersubtext</key>
+				<string></string>
+			</dict>
+		</array>
 		<key>E037422F-BB78-4C52-9EC9-D23FCF6CA31A</key>
 		<array>
 			<dict>
@@ -71,6 +82,48 @@
 		<dict>
 			<key>config</key>
 			<dict>
+				<key>action</key>
+				<integer>0</integer>
+				<key>argument</key>
+				<integer>0</integer>
+				<key>hotkey</key>
+				<integer>44</integer>
+				<key>hotmod</key>
+				<integer>262144</integer>
+				<key>hotstring</key>
+				<string>/</string>
+				<key>leftcursor</key>
+				<false/>
+				<key>modsmode</key>
+				<integer>0</integer>
+			</dict>
+			<key>type</key>
+			<string>alfred.workflow.trigger.hotkey</string>
+			<key>uid</key>
+			<string>96CE9469-D48F-491F-8D8D-BFD154DB2783</string>
+			<key>version</key>
+			<integer>0</integer>
+		</dict>
+		<dict>
+			<key>config</key>
+			<dict>
+				<key>escaping</key>
+				<integer>102</integer>
+				<key>script</key>
+				<string>python dropbox_handler.py "{query}"</string>
+				<key>type</key>
+				<integer>0</integer>
+			</dict>
+			<key>type</key>
+			<string>alfred.workflow.action.script</string>
+			<key>uid</key>
+			<string>739C48C5-6C99-4B62-AAB4-E23DCD2035B5</string>
+			<key>version</key>
+			<integer>0</integer>
+		</dict>
+		<dict>
+			<key>config</key>
+			<dict>
 				<key>lastpathcomponent</key>
 				<false/>
 				<key>onlyshowifquerypopulated</key>
@@ -93,23 +146,6 @@
 			<key>version</key>
 			<integer>0</integer>
 		</dict>
-		<dict>
-			<key>config</key>
-			<dict>
-				<key>escaping</key>
-				<integer>102</integer>
-				<key>script</key>
-				<string>python dropbox_handler.py "{query}"</string>
-				<key>type</key>
-				<integer>0</integer>
-			</dict>
-			<key>type</key>
-			<string>alfred.workflow.action.script</string>
-			<key>uid</key>
-			<string>739C48C5-6C99-4B62-AAB4-E23DCD2035B5</string>
-			<key>version</key>
-			<integer>0</integer>
-		</dict>
 	</array>
 	<key>readme</key>
 	<string></string>
@@ -121,6 +157,11 @@
 			<real>10</real>
 		</dict>
 		<key>94B5A64D-BE8D-43B8-847A-F84CA4214C44</key>
+		<dict>
+			<key>ypos</key>
+			<real>10</real>
+		</dict>
+		<key>96CE9469-D48F-491F-8D8D-BFD154DB2783</key>
 		<dict>
 			<key>ypos</key>
 			<real>10</real>
