@@ -16,10 +16,13 @@ def main(wf):
     access_token = uid = path = ''
     if len(query.split()) > 0:
         uid = query.split()[0]
-        access_tokens = json.loads(wf.get_password('dropbox_access_tokens'))
-        if uid in access_tokens:
-            access_token = access_tokens[uid]
         path = query[len(uid) + 1:]
+        try:
+            access_tokens = json.loads(wf.get_password('dropbox_access_tokens'))
+            if uid in access_tokens:
+                access_token = access_tokens[uid]
+        except PasswordNotFound:
+            pass
 
     if access_token != '' and command == "share":
         return share_path(path, access_token)
