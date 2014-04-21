@@ -13,23 +13,21 @@ def main(wf):
 
     command = user_input.split()[0]
     query = user_input[len(command) + 1:]
-    uid = path = ''
+    access_token = uid = path = ''
     if len(query.split()) > 0:
         uid = query.split()[0]
         access_tokens = json.loads(wf.get_password('dropbox_access_tokens'))
         if uid in access_tokens:
             access_token = access_tokens[uid]
-        else:
-            access_token = None
         path = query[len(uid) + 1:]
 
-    if access_token is not None and command == "share":
+    if access_token != '' and command == "share":
         return share_path(path, access_token)
-    elif access_token is not None and command == "download":
+    elif access_token != '' and command == "download":
         return download_path(path, access_token)
-    elif access_token is not None and command == "desktop":
+    elif access_token != '' and command == "desktop":
         return download_path(path, access_token, '~/Desktop/')
-    elif access_token is not None and command == "delete":
+    elif access_token != '' and command == "delete":
         return delete_path(path, access_token)
     elif command == "url":
         webbrowser.open(query)
