@@ -117,7 +117,9 @@ def authorize(auth_code):
 def remove(uid):
     try:
         access_tokens = json.loads(wf.get_password('dropbox_access_tokens'))
-        access_tokens.pop(uid, None)
+        access_token = access_tokens.pop(uid, None)
+        api_client = client.DropboxClient(access_token)
+        api_client.disable_access_token()
         wf.save_password('dropbox_access_tokens', json.dumps(access_tokens))
         wf.clear_cache()
         print 'Deauthorization successful'

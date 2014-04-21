@@ -25,12 +25,12 @@ def main(wf):
 
 
     if command == 'auth':
-        if len(user_input) > 1:
-            wf.add_item(
-                'Authorize with "%s".' % user_input[1], 'Press enter to proceed', arg='auth %s' % query, valid=True)
-        else:
+        if query == '':
             wf.add_item(
               'Please enter your authorization code', 'If you don\'t have one, simply press enter.', arg='url ' + get_auth_url(), valid=True)
+        else:
+            wf.add_item(
+                'Authorize with "%s"' % query, 'Press enter to proceed', arg='auth %s' % query, valid=True)
 
     elif accounts is not None and command == 'remove':
         for account in accounts:
@@ -75,7 +75,7 @@ def main(wf):
                 wf.add_item(get_title(account), account['email'], autocomplete='%s ' % account['uid'], valid=False)
 
         wf.add_item('Add another Dropbox account', '', autocomplete='auth ', valid=False)
-        if accounts is not None:
+        if accounts is not None and len(accounts) > 0:
             wf.add_item('Remove an existing Dropbox account', '', autocomplete='remove', valid=False)
 
     
