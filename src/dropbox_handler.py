@@ -1,8 +1,9 @@
 import sys
 import os
+import json
 from AppKit import NSPasteboard, NSArray
 import webbrowser
-from workflow import Workflow
+from workflow import Workflow, PasswordNotFound
 from dropbox import client, rest
 import config
 
@@ -26,13 +27,15 @@ def main(wf):
         return 0
     elif command == "auth":
         return authorize(path)
+    elif command == "remove":
+        return remove(path)
 
     print 'An error occured.'
     return 0
 
 
 def share_path(path):
-    access_token = wf.get_password('dropbox_access_token')
+    access_token = wf.get_password('dropbox_access_tokens')
     api_client = client.DropboxClient(access_token)
     try:
         url = api_client.share(path)['url']
@@ -51,7 +54,7 @@ def share_path(path):
 
 
 def download_path(path, target='~/Downloads/'):
-    access_token = wf.get_password('dropbox_access_token')
+    access_token = wf.get_password('dropbox_access_tokens')
     api_client = client.DropboxClient(access_token)
     try:
         filename = os.path.basename(path)
@@ -79,7 +82,7 @@ def download_path(path, target='~/Downloads/'):
 
 
 def delete_path(path):
-    access_token = wf.get_password('dropbox_access_token')
+    access_token = wf.get_password('dropbox_access_tokens')
     api_client = client.DropboxClient(access_token)
     try:
         self.api_client.file_delete(path)
@@ -95,11 +98,31 @@ def authorize(auth_code):
         config.APP_KEY, config.APP_SECRET)
     try:
         access_token, user_id = flow.finish(auth_code)
-        wf.save_password(
-            'dropbox_access_token', access_token)
+
+        access_tokens = {}
+        try:
+            access_tokens = json.loads(wf.get_password('dropbox_access_tokens'))
+        except PasswordNotFound:
+            pass
+
+        access_tokens[user_id] = access_token
+        wf.save_password('dropbox_access_tokens', json.dumps(access_tokens))
+        wf.clear_cache()
         print 'Authorization successful'
-    except dbrest.ErrorResponse, e:
+    except rest.ErrorResponse, e:
         print 'Error: %s' % (e,)
+
+    return 0
+
+def remove(uid):
+    try:
+        access_tokens = json.loads(wf.get_password('dropbox_access_tokens'))
+        access_tokens.pop(uid, None)
+        wf.save_password('dropbox_access_tokens', json.dumps(access_tokens))
+        wf.clear_cache()
+        print 'Deauthorization successful'
+    except PasswordNotFound:
+        print 'Not access tokens found.'
 
     return 0
 
