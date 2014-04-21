@@ -41,13 +41,13 @@ def main(wf):
             for f in file_or_folder:
                 if len(user_input) > 1 and query == f['path']:
                     wf.add_item(
-                        'Share', 'Copy link to clipboard', arg='share ' + f['path'], icon='dbicons/folder_public.png', valid=True)
+                        'Share', 'Copy link to clipboard', arg='share %s %s' % (command, f['path']), icon='dbicons/folder_public.png', valid=True)
                     wf.add_item(
-                        'Save to Downloads', arg='download ' + f['path'], icon='icons/download.png', valid=True)
+                        'Save to Downloads', arg='download %s %s' % (command, f['path']), icon='icons/download.png', valid=True)
                     wf.add_item(
-                        'Save to Desktop', arg='desktop ' + f['path'], icon='icons/desktop.png', valid=True)
+                        'Save to Desktop', arg='desktop %s %s' % (command, f['path']), icon='icons/desktop.png', valid=True)
                     wf.add_item(
-                        'Delete', arg='delete ' + f['path'], icon=ICON_TRASH, valid=True)
+                        'Delete', arg='delete %s %s' % (command, f['path']), icon=ICON_TRASH, valid=True)
                 else:
                     title = os.path.basename(f['path'])
                     subtitle = 'Modified: ' + \

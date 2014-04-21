@@ -12,30 +12,38 @@ def main(wf):
     user_input = ''.join(wf.args)
 
     command = user_input.split()[0]
-    path = user_input[len(command) + 1:]
+    query = user_input[len(command) + 1:]
+    uid = path = ''
+    if len(query.split()) > 0:
+        uid = query.split()[0]
+        access_tokens = json.loads(wf.get_password('dropbox_access_tokens'))
+        if uid in access_tokens:
+            access_token = access_tokens[uid]
+        else:
+            access_token = None
+        path = query[len(uid) + 1:]
 
-    if command == "share":
-        return share_path(path)
-    elif command == "download":
-        return download_path(path)
-    elif command == "desktop":
-        return download_path(path, '~/Desktop/')
-    elif command == "delete":
-        return delete_path(path)
+    if access_token is not None and command == "share":
+        return share_path(path, access_token)
+    elif access_token is not None and command == "download":
+        return download_path(path, access_token)
+    elif access_token is not None and command == "desktop":
+        return download_path(path, access_token, '~/Desktop/')
+    elif access_token is not None and command == "delete":
+        return delete_path(path, access_token)
     elif command == "url":
-        webbrowser.open(path)
+        webbrowser.open(query)
         return 0
     elif command == "auth":
-        return authorize(path)
+        return authorize(query)
     elif command == "remove":
-        return remove(path)
+        return remove(query)
 
     print 'An error occured.'
     return 0
 
 
-def share_path(path):
-    access_token = wf.get_password('dropbox_access_tokens')
+def share_path(path, access_token):
     api_client = client.DropboxClient(access_token)
     try:
         url = api_client.share(path)['url']
@@ -53,8 +61,7 @@ def share_path(path):
     return 0
 
 
-def download_path(path, target='~/Downloads/'):
-    access_token = wf.get_password('dropbox_access_tokens')
+def download_path(path, access_token, target='~/Downloads/'):
     api_client = client.DropboxClient(access_token)
     try:
         filename = os.path.basename(path)
@@ -81,8 +88,7 @@ def download_path(path, target='~/Downloads/'):
     return 0
 
 
-def delete_path(path):
-    access_token = wf.get_password('dropbox_access_tokens')
+def delete_path(path, access_token):
     api_client = client.DropboxClient(access_token)
     try:
         self.api_client.file_delete(path)
