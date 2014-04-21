@@ -1,6 +1,7 @@
 import sys
 import os
 import json
+import unicodedata
 import datetime
 from email.utils import parsedate
 import time
@@ -10,7 +11,11 @@ import config
 
 
 def main(wf):
-    user_input = ''.join(wf.args).split()
+    user_input = wf.args[0]
+    command = query = ''
+    if len(user_input) > 0:
+        command = user_input.split()[0]
+        query = user_input[len(command) + 1:]
 
     try:
         wf.get_password('dropbox_access_tokens')
@@ -19,22 +24,22 @@ def main(wf):
         accounts = None
 
 
-    if len(user_input) > 0 and user_input[0] == 'auth':
+    if command == 'auth':
         if len(user_input) > 1:
             wf.add_item(
-                'Authorize with "%s".' % user_input[1], 'Press enter to proceed.', arg='auth %s' % user_input[1], valid=True)
+                'Authorize with "%s".' % user_input[1], 'Press enter to proceed', arg='auth %s' % query, valid=True)
         else:
             wf.add_item(
-              'Please enter your authorization code.', 'If you don\'t have one, simply press enter.', arg='url ' + get_auth_url(), valid=True)
+              'Please enter your authorization code', 'If you don\'t have one, simply press enter.', arg='url ' + get_auth_url(), valid=True)
 
-    elif accounts is not None and len(user_input) > 0 and user_input[0] == 'remove':
+    elif accounts is not None and command == 'remove':
         for account in accounts:
             wf.add_item(get_title(account), account['email'], arg='remove %s' % account['uid'], valid=True)
-    elif accounts is not None and len(user_input) > 0 and uid_exists(user_input[0], accounts):
-        file_or_folder = get_file_or_folder(user_input)
+    elif accounts is not None and len(user_input) > 0 and uid_exists(command, accounts):
+        file_or_folder = get_file_or_folder(command, query)
         if len(file_or_folder) > 0:
             for f in file_or_folder:
-                if user_input == f['path']:
+                if len(user_input) > 1 and query == f['path']:
                     wf.add_item(
                         'Share', 'Copy link to clipboard', arg='share ' + f['path'], icon='dbicons/folder_public.png', valid=True)
                     wf.add_item(
@@ -52,30 +57,33 @@ def main(wf):
                     if f['is_dir']:
                         title += '/'
                         wf.add_item(
-                            title, subtitle, icon=icon, autocomplete= '%s %s/' % (user_input[0], f['path']), valid=False)
+                            title, subtitle, icon=icon, autocomplete= '%s %s/' % (command, f['path']), valid=False)
                     else:
                         title += ' (' + f['size'] + ')'
                         wf.add_item(
-                            title, subtitle, icon=icon, autocomplete='%s %s' % (user_input[0], f['path']), valid=False)
+                            title, subtitle, icon=icon, autocomplete='%s %s' % (command, f['path']), valid=False)
+            if query != '':
+                path = f['path'].split('/')
+                path = '/'.join(path[:-2])
+                wf.add_item('..', 'Chaneg to parent directory', icon='dbicons/folder.png', autocomplete='%s %s/' % (command, path), valid=False)
         else:
             wf.add_item(
-                'No files were found.', 'Try a different request!', valid=False)
+                'No files were found', 'Try a different request.', valid=False)
     else:
         if accounts is not None:
             for account in accounts:
                 wf.add_item(get_title(account), account['email'], autocomplete='%s ' % account['uid'], valid=False)
 
-        wf.add_item('Add another Dropbox account.', '', autocomplete='auth ', valid=False)
+        wf.add_item('Add another Dropbox account', '', autocomplete='auth ', valid=False)
         if accounts is not None:
-            wf.add_item('Remove an existing Dropbox account.', '', autocomplete='remove', valid=False)
+            wf.add_item('Remove an existing Dropbox account', '', autocomplete='remove', valid=False)
 
     
     wf.send_feedback()
 
 
-def get_file_or_folder(user_input):
-    uid = user_input[0]
-    path = '/' if len(user_input) < 2 else user_input[1]
+def get_file_or_folder(uid, query):
+    path = '/' if query == '' else query
 
     if len(path) > 1 and path[-1] == '/':
         path = path[:-1]
@@ -96,7 +104,7 @@ def get_file_or_folder(user_input):
         last_path = wf.cached_data('last_path')
         if last_path in path:
             query = path[len(last_path) + 1:]
-            output = api_client.search(last_path, query, file_limit=100)
+            output = api_client.search(last_path, unicodedata.normalize('NFC', query), file_limit=100)
 
     return output
 
