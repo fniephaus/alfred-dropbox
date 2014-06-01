@@ -1,4 +1,4 @@
-Dropbox Client for Alfred *Beta*
+Dropbox Client for Alfred
 ==============
 
 This workflow lets you quickly access multiple Dropbox accounts with [Alfred](http://www.alfredapp.com/).
