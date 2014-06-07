@@ -96,13 +96,19 @@
 				<false/>
 				<key>modsmode</key>
 				<integer>0</integer>
+				<key>relatedApps</key>
+				<array>
+					<string>com.googlecode.iterm2</string>
+				</array>
+				<key>relatedAppsMode</key>
+				<integer>2</integer>
 			</dict>
 			<key>type</key>
 			<string>alfred.workflow.trigger.hotkey</string>
 			<key>uid</key>
 			<string>96CE9469-D48F-491F-8D8D-BFD154DB2783</string>
 			<key>version</key>
-			<integer>0</integer>
+			<integer>1</integer>
 		</dict>
 		<dict>
 			<key>config</key>
