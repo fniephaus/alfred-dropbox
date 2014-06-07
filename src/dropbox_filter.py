@@ -65,7 +65,7 @@ def main(wf):
             if query != '':
                 path = f['path'].split('/')
                 path = '/'.join(path[:-2])
-                wf.add_item('..', 'Chaneg to parent directory', icon='dbicons/folder.png', autocomplete='%s %s/' % (command, path), valid=False)
+                wf.add_item('..', 'Change to parent directory', icon='dbicons/folder.png', autocomplete='%s %s/' % (command, path), valid=False)
         else:
             wf.add_item(
                 'No files were found', 'Try a different request.', valid=False)
