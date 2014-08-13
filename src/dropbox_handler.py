@@ -18,7 +18,8 @@ def main(wf):
         uid = query.split()[0]
         path = query[len(uid) + 1:]
         try:
-            access_tokens = json.loads(wf.get_password('dropbox_access_tokens'))
+            access_tokens = json.loads(
+                wf.get_password('dropbox_access_tokens'))
             if uid in access_tokens:
                 access_token = access_tokens[uid]
         except PasswordNotFound:
@@ -108,7 +109,8 @@ def authorize(auth_code):
 
         access_tokens = {}
         try:
-            access_tokens = json.loads(wf.get_password('dropbox_access_tokens'))
+            access_tokens = json.loads(
+                wf.get_password('dropbox_access_tokens'))
         except PasswordNotFound:
             pass
 
@@ -120,6 +122,7 @@ def authorize(auth_code):
         print 'Error: %s' % (e,)
 
     return 0
+
 
 def remove(uid):
     try:
