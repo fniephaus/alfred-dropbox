@@ -41,7 +41,7 @@ def main(wf):
             for f in file_or_folder:
                 if len(user_input) > 1 and query == f['path']:
                     wf.add_item(
-                        'Share', 'Copy link to clipboard', arg='share %s %s' % (command, f['path']), icon='dbicons/folder_public.png', valid=True)
+                        'Share', 'Copy link to clipboard', arg='share %s %s' % (command, f['path']), icon='icons/folder_public.png', valid=True)
                     wf.add_item(
                         'Save to Downloads', arg='download %s %s' % (command, f['path']), icon='icons/download.png', valid=True)
                     wf.add_item(
@@ -53,7 +53,11 @@ def main(wf):
                     subtitle = 'Modified: ' + \
                         time.strftime(
                             '%Y-%m-%d %H:%M:%S', parsedate(f['modified']))
-                    icon = 'dbicons/' + f['icon'] + '.png'
+
+                    icon = 'icons/%s.png' % f['icon']
+                    if not os.path.isfile(icon):
+                        icon = 'icons/page_white.png'
+
                     if f['is_dir']:
                         title += '/'
                         wf.add_item(
@@ -65,7 +69,7 @@ def main(wf):
             if query != '':
                 path = f['path'].split('/')
                 path = '/'.join(path[:-2])
-                wf.add_item('..', 'Change to parent directory', icon='dbicons/folder.png', autocomplete='%s %s/' % (command, path), valid=False)
+                wf.add_item('..', 'Change to parent directory', icon='icons/folder.png', autocomplete='%s %s/' % (command, path), valid=False)
         else:
             wf.add_item(
                 'No files were found', 'Try a different request.', valid=False)
