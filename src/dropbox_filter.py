@@ -6,11 +6,18 @@ import datetime
 from email.utils import parsedate
 import time
 from workflow import Workflow, PasswordNotFound, ICON_TRASH
+from workflow.background import run_in_background
 from dropbox import client, rest
+from helpers import get_resource, get_hash, get_account_info, uid_exists
 import config
 
 
 def main(wf):
+    if wf.update_available:
+        subtitle = 'New: %s' % wf.update_info['body']
+        wf.add_item("An update is available!", subtitle,
+                    autocomplete='workflow:update', valid=False)
+
     user_input = wf.args[0]
     command = query = ''
     if len(user_input) > 0:
@@ -20,7 +27,7 @@ def main(wf):
     try:
         wf.get_password('dropbox_access_tokens')
         accounts = wf.cached_data(
-            'dropbox_accounts', data_func=get_account_info, max_age=60 * 60)
+            'dropbox_accounts', data_func=get_account_info, max_age = 360)
     except PasswordNotFound:
         accounts = None
 
@@ -90,40 +97,24 @@ def main(wf):
     wf.send_feedback()
 
 
+def prefetch(wf, uid, path):
+    job_name = 'dropbox_prefetch_%s' % get_hash(uid, path)
+    cmd = ['/usr/bin/python', wf.workflowfile('dropbox_prefetch.py'), uid, path]
+    run_in_background(job_name, cmd)
+
+
 def get_file_or_folder(uid, query):
     path = '/' if query == '' else query
 
     if len(path) > 1 and path[-1] == '/':
         path = path[:-1]
 
-    access_tokens = json.loads(wf.get_password('dropbox_access_tokens'))
-    api_client = client.DropboxClient(access_tokens[uid])
-    output = []
-    try:
-        resp = api_client.metadata(path, file_limit=100)
-        if 'contents' in resp:
-            output = resp['contents']
-        else:
-            output.append(resp)
-        wf.cache_data('last_path', path)
-        wf.cache_data('last_output', output)
-        return output
-    except rest.ErrorResponse, e:
-        last_path = wf.cached_data('last_path')
-        if last_path in path:
-            query = path[len(last_path) + 1:]
-            output = api_client.search(
-                last_path, unicodedata.normalize('NFC', query), file_limit=100)
+    prefetch(wf, uid, path)
 
-    return output
+    def wrapper():
+        return get_resource(uid, path)
 
-
-def get_account_info():
-    output = []
-    for access_token in json.loads(wf.get_password('dropbox_access_tokens')).values():
-        api_client = client.DropboxClient(access_token)
-        output.append(api_client.account_info())
-    return output
+    return wf.cached_data(get_hash(uid, path), wrapper, max_age = 120)
 
 
 def get_auth_url():
@@ -138,16 +129,6 @@ def get_title(account):
     return '%s (%s%% of %s used)' % (account['display_name'], total_used, sizeof(account['quota_info']['quota']))
 
 
-def uid_exists(uid, accounts):
-    for account in accounts:
-        try:
-            if account['uid'] == int(uid):
-                return True
-        except ValueError:
-            return False
-    return False
-
-
 def sizeof(num):
     for x in ['bytes', 'KB', 'MB', 'GB', 'TB']:
         if num < 1024.0:
@@ -156,6 +137,9 @@ def sizeof(num):
 
 
 if __name__ == '__main__':
-    wf = Workflow()
+    wf = Workflow(update_config={
+        'github_slug': 'fniephaus/alfred-dropbox',
+        'version': 'v1.0',
+    })
     log = wf.logger
     sys.exit(wf.run(main))
