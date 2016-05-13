@@ -1,12 +1,14 @@
-import sys
 import os
-from email.utils import parsedate
+import sys
 import time
+from email.utils import parsedate
+
+import config
+from helpers import get_resource, get_hash, get_account_info, uid_exists
+
+from dropbox import client
 from workflow import Workflow, PasswordNotFound, ICON_TRASH
 from workflow.background import run_in_background
-from dropbox import client
-from helpers import get_resource, get_hash, get_account_info, uid_exists
-import config
 
 
 def main(wf):
@@ -156,8 +158,9 @@ def sizeof(num):
 
 
 if __name__ == '__main__':
-    wf = Workflow(update_config={
-        'github_slug': 'fniephaus/alfred-dropbox',
-    })
+    wf = Workflow(
+        update_settings={'github_slug': 'fniephaus/alfred-dropbox'},
+        help_url='https://github.com/fniephaus/alfred-dropbox/issues'
+    )
     log = wf.logger
     sys.exit(wf.run(main))

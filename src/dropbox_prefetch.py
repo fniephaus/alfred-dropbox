@@ -1,4 +1,5 @@
 import sys
+
 from workflow import Workflow
 from helpers import get_resource, get_hash, get_account_info, uid_exists
 

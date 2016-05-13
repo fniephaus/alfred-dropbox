@@ -1,11 +1,13 @@
-import sys
-import os
 import json
-from AppKit import NSPasteboard, NSArray
+import os
+import sys
 import webbrowser
-from workflow import Workflow, PasswordNotFound
-from dropbox import client, rest
+from AppKit import NSPasteboard, NSArray
+
 import config
+
+from dropbox import client, rest
+from workflow import Workflow, PasswordNotFound
 
 
 def main(wf):
