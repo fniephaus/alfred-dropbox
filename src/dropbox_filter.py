@@ -158,7 +158,6 @@ def sizeof(num):
 if __name__ == '__main__':
     wf = Workflow(update_config={
         'github_slug': 'fniephaus/alfred-dropbox',
-        'version': 'v1.0',
     })
     log = wf.logger
     sys.exit(wf.run(main))
