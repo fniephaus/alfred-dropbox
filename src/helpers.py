@@ -1,14 +1,16 @@
 import json
 import hashlib
-from workflow import Workflow, PasswordNotFound
+from workflow import Workflow
 from dropbox import client, rest
 
 wf = Workflow()
 
 
 def get_resource(uid, path):
-    cached_resource = wf.cached_data(get_hash(uid, path), max_age = 0)
-    hash_value = hash_value['hash'] if 'hash' in cached_resource else None
+    cached_resource = wf.cached_data(get_hash(uid, path), max_age=0)
+    hash_value = None
+    if cached_resource and 'hash' in cached_resource:
+        hash_value = cached_resource['hash']
     access_tokens = json.loads(wf.get_password('dropbox_access_tokens'))
     api_client = client.DropboxClient(access_tokens[uid])
     try:
@@ -32,7 +34,8 @@ def get_hash(uid, path):
 
 def get_account_info():
     output = []
-    for access_token in json.loads(wf.get_password('dropbox_access_tokens')).values():
+    for access_token in json.loads(
+            wf.get_password('dropbox_access_tokens')).values():
         api_client = client.DropboxClient(access_token)
         output.append(api_client.account_info())
     return output

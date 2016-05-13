@@ -34,15 +34,15 @@ def main(wf):
             return download_path(path, access_token, '~/Desktop/')
         elif command == "delete":
             return delete_path(path, access_token)
-        elif command == "url":
-            webbrowser.open(query)
-            return 0
-        elif command == "auth":
-            return authorize(query)
-        elif command == "remove":
-            return remove(query)
         else:
             print 'Invalid command: %s' % command
+    elif command == "url":
+        webbrowser.open(query)
+        return 0
+    elif command == "auth":
+        return authorize(query)
+    elif command == "remove":
+        return remove(query)
 
     print 'An error occured.'
     return 0

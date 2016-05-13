@@ -1,9 +1,6 @@
-import json
 import sys
-from dropbox import client, rest
-from workflow import Workflow, PasswordNotFound
+from workflow import Workflow
 from helpers import get_resource, get_hash, get_account_info, uid_exists
-import config
 
 wf = Workflow()
 
