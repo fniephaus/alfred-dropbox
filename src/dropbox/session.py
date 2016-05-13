@@ -37,6 +37,7 @@ class BaseSession(object):
     API_HOST = "api.dropbox.com"
     WEB_HOST = "www.dropbox.com"
     API_CONTENT_HOST = "api-content.dropbox.com"
+    API_NOTIFICATION_HOST = "api-notify.dropbox.com"
 
     def __init__(self, consumer_key, consumer_secret, access_type="auto", locale=None, rest_client=rest.RESTClient):
         """Initialize a DropboxSession object.

@@ -21,7 +21,7 @@ except ImportError:
     raise ImportError('Dropbox python client requires urllib3.')
 
 
-SDK_VERSION = "2.0.0"
+SDK_VERSION = "2.2.0"
 
 TRUSTED_CERT_FILE = pkg_resources.resource_filename(__name__, 'trusted-certs.crt')
 
@@ -192,7 +192,7 @@ class RESTClientObject(object):
         if post_params:
             if body:
                 raise ValueError("body parameter cannot be used with post_params parameter")
-            body = urllib.urlencode(post_params)
+            body = params_to_urlencoded(post_params)
             headers["Content-type"] = "application/x-www-form-urlencoded"
 
         # Handle StringIO instances, because urllib3 doesn't.
@@ -223,7 +223,7 @@ class RESTClientObject(object):
         except urllib3.exceptions.SSLError as e:
             raise RESTSocketError(url, "SSL certificate error: %s" % e)
 
-        if r.status != 200:
+        if r.status not in (200, 206):
             raise ErrorResponse(r, r.read())
 
         return self.process_response(r, raw_response)
@@ -284,7 +284,7 @@ class RESTClient(object):
               It may also be a file-like object. The body
               parameter may not be used with the post_params parameter.
             headers
-              A  dictionary of headers to send with the request.
+              A dictionary of headers to send with the request.
             raw_response
               Whether to return a :class:`RESTResponse` object. Default ``False``.
               It's best enabled for requests that return large amounts of data that you
@@ -339,8 +339,8 @@ class _ErrorResponse__doc__(Exception):
 
     _status__doc__ = "HTTP response status (an int)."
     _reason__doc__ = "HTTP response reason (a string)."
-    _body__doc__ = "HTTP response body (string or JSON dict)."
     _headers__doc__ = "HTTP response headers (a list of (header, value) tuples)."
+    _body__doc__ = "HTTP response body (string or JSON dict)."
     _error_msg__doc__ = "Error message for developer (optional)."
     _user_error_msg__doc__ = "Error message for end user (optional)."
 
@@ -398,3 +398,19 @@ class ErrorResponse(Exception):
                   "Body - %.100r Headers - %r" % (self.body, self.headers)
 
         return "[%d] %s" % (self.status, msg)
+
+
+def params_to_urlencoded(params):
+    """
+    Returns a application/x-www-form-urlencoded 'str' representing the key/value pairs in 'params'.
+    
+    Keys are values are str()'d before calling urllib.urlencode, with the exception of unicode
+    objects which are utf8-encoded.
+    """
+    def encode(o):
+        if isinstance(o, unicode):
+            return o.encode('utf8')
+        else:
+            return str(o)
+    utf8_params = {encode(k): encode(v) for k, v in params.iteritems()}
+    return urllib.urlencode(utf8_params)

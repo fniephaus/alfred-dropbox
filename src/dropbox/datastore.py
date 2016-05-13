@@ -21,6 +21,7 @@ its methods are thread-safe.  Also, static methods are thread-safe.
 """
 
 __all__ = ['DatastoreError', 'DatastoreNotFoundError', 'DatastoreConflictError',
+           'DatastorePermissionError',
            'DatastoreManager', 'DatastoreInfo', 'Datastore', 'Table', 'Record',
            'Date', 'Bytes', 'List',
            ]
@@ -37,8 +38,6 @@ import sys
 import time
 import uuid
 
-from .rest import RESTSocketError, ErrorResponse
-
 # The port to Python 3 is not yet finished.
 PY3 = sys.version_info[0] == 3
 
@@ -49,6 +48,12 @@ if PY3:  # pragma: no cover
     long = int
 else:
     bytearray = bytes
+
+# Internal values for roles, used by the HTTP protocol.
+ROLE_OWNER = 3000
+ROLE_EDITOR = 2000
+ROLE_VIEWER = 1000
+ROLE_NONE = 0
 
 
 def _dbase64_encode(b):
@@ -75,6 +80,16 @@ def _dbase64_decode(s):
     return b
 
 
+def _generate_shareable_dsid():
+    """Internal helper to generate a random shareable (dsid, key) pair."""
+    # Start with 32 random bytes so the encoded key will be at least 32 characters in length.
+    bkey = uuid.uuid4().bytes + uuid.uuid4().bytes
+    key = _dbase64_encode(bkey)
+    # Use the sha256 of the *encoded* key.
+    keyhash = hashlib.sha256(key.encode('ascii')).digest()
+    dsid = '.' + _dbase64_encode(keyhash)
+    return dsid, key
+
 class DatastoreError(Exception):
     """Exception raised for datastore-specific error conditions.
 
@@ -99,6 +114,13 @@ class DatastoreNotFoundError(DatastoreError):
 
 class DatastoreConflictError(DatastoreError):
     """Exception raised when the server reports a conflict.
+
+    Derives from :class:`DatastoreError`.
+    """
+
+
+class DatastorePermissionError(DatastoreError):
+    """Exception raised when the server denies access.
 
     Derives from :class:`DatastoreError`.
     """
@@ -132,13 +154,15 @@ class _DatastoreOperations(object):
     def __init__(self, client):
         self._client = client
 
-    def _check_not_found(self, resp):
+    def _check_access_errors(self, resp):
+        if 'access_denied' in resp:
+            raise DatastorePermissionError(resp['access_denied'], resp)
         if 'notfound' in resp:
-            raise DatastoreNotFoundError(resp, resp['notfound'])
+            raise DatastoreNotFoundError(resp['notfound'], resp)
         return resp
 
     def _check_rev(self, resp):
-        resp = self._check_not_found(resp)
+        resp = self._check_access_errors(resp)
         if 'rev' not in resp:
             raise DatastoreError('rev missing from response: %r' % (resp,), resp)
         return resp
@@ -150,7 +174,7 @@ class _DatastoreOperations(object):
         return resp
 
     def _check_ok(self, resp):
-        resp = self._check_not_found(resp)
+        resp = self._check_access_errors(resp)
         if 'ok' not in resp:
             raise DatastoreError('ok missing from response: %r' % (resp,), resp)
         return resp
@@ -178,7 +202,7 @@ class _DatastoreOperations(object):
         return resp
 
     def _check_get_deltas(self, resp):
-        resp = self._check_not_found(resp)
+        resp = self._check_access_errors(resp)
         # If there are no new deltas the response is empty.
         if resp and 'deltas' not in resp:
             raise DatastoreError('deltas missing from response: %r' % (resp,), resp)
@@ -198,12 +222,7 @@ class _DatastoreOperations(object):
 
     def create_datastore(self):
         # NOTE: This generates a dsid locally and adds it to the returned response.
-        # Start with 32 random bytes so the encoded key will be at least 32 characters in length.
-        bkey = uuid.uuid4().bytes + uuid.uuid4().bytes
-        key = _dbase64_encode(bkey)
-        # Use the sha256 of the *encoded* key.
-        keyhash = hashlib.sha256(key.encode('ascii')).digest()
-        dsid = '.' + _dbase64_encode(keyhash)
+        dsid, key = _generate_shareable_dsid()
         url, params, headers = self._client.request('/datastores/create_datastore',
                                                     {'dsid': dsid, 'key': key})
         resp = self._client.rest_client.POST(url, params, headers)
@@ -236,7 +255,7 @@ class _DatastoreOperations(object):
         resp = self._client.rest_client.GET(url, headers)
         return self._check_get_deltas(resp)
 
-    def put_deltas(self, handle, rev, changes, nonce=None):
+    def put_delta(self, handle, rev, changes, nonce=None):
         args = {'handle': handle,
                 'rev': str(rev),
                 'changes': json.dumps(changes),
@@ -253,10 +272,12 @@ class _DatastoreOperations(object):
             params['list_datastores'] = json.dumps({'token': token})
         if cursors:
             params['get_deltas'] = json.dumps({'cursors': cursors})
-        url, params, headers = self._client.request('/datastores/await', params, method='GET')
-        resp = self._client.rest_client.GET(url, headers)
+        url, params, headers = self._client.request('/datastores/await', params, method='POST')
+        resp = self._client.rest_client.POST(url, params, headers)
         return self._check_await(resp)
 
+    def get_client(self):
+        return self._client
 
 class DatastoreManager(object):
     """A manager for datastores.
@@ -291,7 +312,7 @@ class DatastoreManager(object):
 
     def get_client(self):
         """Return the :class:`dropbox.client.DropboxClient` object used."""
-        return self._dsops._client
+        return self._dsops.get_client()
 
     def open_default_datastore(self):
         """Open the default datastore for this account, creating it if needed.
@@ -315,7 +336,7 @@ class DatastoreManager(object):
         return self._datastore_from_response(resp, id)
 
     def open_or_create_datastore(self, id):
-        """Open a local datastore, creating it if it does not yet exist.
+        """Open a private datastore, creating it if it does not yet exist.
 
         The ID must not start with a dot.
 
@@ -340,7 +361,7 @@ class DatastoreManager(object):
         resp = self._dsops.create_datastore()
         return self._datastore_from_response(resp, resp['dsid'])
 
-    def open_raw_datastore(self, id, handle):
+    def open_raw_datastore(self, id, handle, role=None):
         """Create a new :class:`Datastore` object without going to the server.
 
         You can use this to save a server roundtrip when opening a
@@ -348,11 +369,20 @@ class DatastoreManager(object):
         :meth:`list_datastores()`::
 
             def open_from_info(mgr, info):
-                ds = mgr.open_raw_datastore(info.id, info.handle)
+                ds = mgr.open_raw_datastore(info.id, info.handle, info.role)
                 ds.load_snapshot()
                 return ds
         """
-        return Datastore(self, id=id, handle=handle)
+        if role is None:
+            role = Datastore.OWNER  # Our best guess.
+        else:
+            if not isinstance(role, basestring):
+                raise TypeError('Role must be a string: %r' % (role,))
+            if role not in (Datastore.OWNER, Datastore.EDITOR, Datastore.VIEWER):
+                raise ValueError('invalid role (%r)' % (role,))
+            if not id.startswith('.') and role != Datastore.OWNER:
+                raise ValueError('private datastore role must be owner: %r' % (role,))
+        return Datastore(self, id=id, handle=handle, role=role)
 
     def delete_datastore(self, id):
         """Delete a datastore given its ID."""
@@ -362,7 +392,8 @@ class DatastoreManager(object):
     def _datastore_from_response(self, resp, id):
         handle = resp['handle']
         rev = resp['rev']
-        ds = Datastore(self, id=id, handle=handle)
+        role = _make_role(resp.get('role'))
+        ds = Datastore(self, id=id, handle=handle, role=role)
         if rev > 0:
             ds.load_snapshot()
         return ds
@@ -523,7 +554,7 @@ class DatastoreManager(object):
         return cursor_map
 
 
-DatastoreInfo = collections.namedtuple('DatastoreInfo', 'id handle rev title mtime')
+DatastoreInfo = collections.namedtuple('DatastoreInfo', 'id handle rev title mtime effective_role')
 
 # Dummy class for docstrings, see doco.py.
 class _DatastoreInfo__doc__(object):
@@ -537,6 +568,10 @@ class _DatastoreInfo__doc__(object):
     _rev__doc__ = """The datastore revision (an integer >= 0)."""
     _title__doc__ = """The datastore title (string or None)."""
     _mtime__doc__ = """The time of last modification (:class:`Date` or None)."""
+    _effective_role__doc__ = """
+        The current user's effective role (:const:`Datastore.OWNER`,
+        :const:`Datastore.EDITOR` or :const:`Datastore.VIEWER`).
+        """
 
 
 def _make_dsinfo(item):
@@ -547,14 +582,122 @@ def _make_dsinfo(item):
         raw_mtime = info.get('mtime')
         if raw_mtime is not None:
             mtime = Date.from_json(raw_mtime)
-    return DatastoreInfo(id=item['dsid'], handle=item['handle'], rev=item['rev'],
-                         title=title, mtime=mtime)
+    dsid = item['dsid']
+    role = _make_role(item.get('role'))
+    assert role is not None, repr(role)
+    return DatastoreInfo(id=dsid, handle=item['handle'], rev=item['rev'],
+                         title=title, mtime=mtime, effective_role=role)
+
+
+def _make_role(irole):
+    if irole is None:
+        return Datastore.OWNER  # Backward compatible default.
+    if not isinstance(irole, (int, long)):
+        raise TypeError('irole must be an integer: %r', irole)
+    # Unknown roles are truncated down to the nearest known role.
+    if irole >= ROLE_OWNER:
+        return Datastore.OWNER
+    if irole >= ROLE_EDITOR:
+        return Datastore.EDITOR
+    if irole >= ROLE_VIEWER:
+        return Datastore.VIEWER
+    return Datastore.NONE
+
+
+def _parse_role(role, owner_ok=False):
+    if role == Datastore.OWNER and owner_ok:
+        return ROLE_OWNER
+    if role == Datastore.EDITOR:
+        return ROLE_EDITOR
+    if role == Datastore.VIEWER:
+        return ROLE_VIEWER
+    if role == Datastore.NONE:
+        return ROLE_NONE
+    if not isinstance(role, basestring):
+        raise TypeError('invalid role type: %r' % (role,))
+    raise ValueError('invalid role: %r' % (role,))
 
 
 _DBASE64_VALID_CHARS = '-_A-Za-z0-9'
-_VALID_NAMED_DSID_RE = r'[a-z0-9_-]([a-z0-9._-]{0,30}[a-z0-9_-])?'
-_VALID_UNNAMED_DSID_RE = r'\.[%s]{1,100}' % _DBASE64_VALID_CHARS
-_VALID_DSID_RE = r'\A(%s|%s)\Z' % (_VALID_NAMED_DSID_RE, _VALID_UNNAMED_DSID_RE)
+_VALID_PRIVATE_DSID_RE = r'[a-z0-9_-]([a-z0-9._-]{0,62}[a-z0-9_-])?'
+_VALID_SHAREABLE_DSID_RE = r'\.[%s]{1,63}' % _DBASE64_VALID_CHARS
+_VALID_DSID_RE = r'\A(%s|%s)\Z' % (_VALID_PRIVATE_DSID_RE, _VALID_SHAREABLE_DSID_RE)
+
+
+class Principal(object):
+    """A principal used in the access control list (ACL).
+
+    Currently the only valid principals are the predefined objects
+    :const:`Datastore.TEAM` and :const:`Datastore.PUBLIC`.
+    """
+
+    def __init__(self, key):
+        assert self.__class__ is not Principal, 'Cannot directly instantiate Principal'
+        self._key = key
+
+    @property
+    def key(self):
+        return self._key
+
+    def __hash__(self):
+        return hash(self._key)
+
+    def __eq__(self, other):
+        if not isinstance(other, Principal):
+            return NotImplemented
+        return self._key == other._key
+
+    def __ne__(self, other):
+        if not isinstance(other, Principal):
+            return NotImplemented
+        return self._key != other._key
+
+
+class User(Principal):
+    """A user is identified by a numeric user ID (uid).
+
+    The uid may be either an integer or a string of digits.
+    """
+
+    def __init__(self, uid):
+        if not isinstance(uid, (int, long, basestring)):
+            raise TypeError('Invalid uid type: %r' % (uid,))
+        if not str(uid).isdigit():
+            raise ValueError('Invalid uid: %r' % (uid,))
+        if str(int(uid)) != str(uid):
+            raise ValueError('Leading zeros or sign not allowed in uid: %r' % (uid,))
+        if int(uid) <= 0:
+            raise ValueError('Zero or negative uid not allowed: %r' % (uid,))
+        super(User, self).__init__('u%s' % uid)
+
+    def __repr__(self):
+        return 'User(%s)' % self._key[1:]
+
+
+class TeamPrincipal(Principal):
+    """:const:`Datastore.TEAM` is a special principal to set team permissions.
+
+    Don't instantiate this class, use the predefined :const:`Datastore.TEAM` variable.
+    """
+
+    def __init__(self):
+        super(TeamPrincipal, self).__init__('team')
+
+    def __repr__(self):
+        return 'TEAM'
+
+
+class PublicPrincipal(Principal):
+    """:const:`Datastore.PUBLIC` is a special principal to set public permissions.
+
+    Don't instantiate this class, use the predefined :const:`Datastore.PUBLIC` variable.
+    """
+
+    def __init__(self):
+        super(PublicPrincipal, self).__init__('public')
+
+    def __repr__(self):
+        return 'PUBLIC'
 
 
 class Datastore(object):
@@ -584,38 +727,129 @@ class Datastore(object):
     :class:`DatastoreManager` instead.
     """
 
-    def __init__(self, manager, id=None, handle=None):
+    DATASTORE_SIZE_LIMIT = 10 * 1024 * 1024  #: Datastore size limit placeholder for sphinx.
+    _DATASTORE_SIZE_LIMIT__doc__ = """
+        The maximum size in bytes of a datastore.
+        """
+
+    PENDING_CHANGES_SIZE_LIMIT = 2 * 1024 * 1024  #: Delta size limit placeholder for sphinx.
+    _PENDING_CHANGES_SIZE_LIMIT__doc__ = """
+        The maximum size in bytes of changes that can be queued up between calls to
+        :meth:`commit()`.
+        """
+
+    RECORD_COUNT_LIMIT = 100000  #: Record count limit placeholder for sphinx.
+    _RECORD_COUNT_LIMIT__doc__ = """
+        The maximum number of records in a datastore.
+        """
+
+    BASE_DATASTORE_SIZE = 1000  #: Base datastore size placeholder for sphinx.
+    _BASE_DATASTORE_SIZE__doc__ = """
+        The size in bytes of a datastore before accounting for the size of its records.
+
+        The overall size of a datastore is this value plus the size of all records.
+        """
+
+    BASE_DELTA_SIZE = 100  #: Base delta size placeholder for sphinx.
+    _BASE_DELTA_SIZE__doc__ = """
+        The size in bytes of a delta before accounting for the size of each change.
+
+        The overall size of a delta is this value plus the size of each change.
+        """
+
+    BASE_CHANGE_SIZE = 100  #: Base change size placeholder for sphinx.
+    _BASE_CHANGE_SIZE__doc__ = """
+        The size in bytes of a change before including the size of its values.
+
+        The overall size of a change is this value plus the size of the values in the change.
+        """
+
+    TEAM = TeamPrincipal()  #: Team placeholder for sphinx.
+    _TEAM__doc__ = """
+        The principal used to get or modify the team role for a datastore.
+        """
+
+    PUBLIC = PublicPrincipal()  #: Public placeholder for sphinx.
+    _PUBLIC__doc__ = """
+        The principal used to get or modify the public role for a datastore.
+        """
+
+    OWNER = 'owner'  #: Owner placeholder for sphinx.
+    _OWNER__doc__ = """
+        The role indicating ownership of a datastore.  Owners have
+        full access and their role cannot be changed or removed.
+        """
+
+    EDITOR = 'editor'  #: Editor placeholder for sphinx.
+    _EDITOR__doc__ = """
+        The role indicating edit (i.e., read-write) access.  Editors
+        can also modify the role for other principals (except owners).
+        """
+
+    VIEWER = 'viewer'  #: Viewer placeholder for sphinx.
+    _VIEWER__doc__ = """
+        The role indicating view (i.e. read-only) access.  Viewers
+        cannot change any aspect of a datastore.
+        """
+
+    NONE = 'none'  #: Viewer placeholder for sphinx.
+    _NONE__doc__ = """
+        The role indicating no access at all.
+        """
+
+    def __init__(self, manager, id=None, handle=None, role=None):
+        if role is not None:
+            # Should've been caught earlier.
+            assert isinstance(role, str), repr(role)
+            assert role in (Datastore.OWNER, Datastore.EDITOR, Datastore.VIEWER), repr(role)
         self._manager = manager
         self._id = id
         self._handle = handle
+        self._role = role
         self._rev = 0
         self._tables = {}
         self._changes = []
+        self._record_count = 0
+        self._size = self.BASE_DATASTORE_SIZE
+        self._pending_changes_size = 0
 
     def __repr__(self):
-        return 'Datastore(<rev=%d>, id=%r, handle=%r)' % (self._rev, self._id, self._handle)
+        return 'Datastore(<rev=%d>, id=%r, handle=%r, role=%r)' % (self._rev, self._id,
+                                                                   self._handle, self._role)
+
+    def _check_edit_permission(self):
+        if self.is_shareable() and self._role not in (Datastore.OWNER, Datastore.EDITOR):
+            raise DatastorePermissionError('This datastore is read-only')
+
+    def _check_shareable(self):
+        if not self.is_shareable():
+            raise DatastoreError('Access control is only supported for shareable datastores')
+
+    def _check_principal(self, principal):
+        if not isinstance(principal, Principal):
+            raise TypeError('A Principal is expected')
 
     @staticmethod
     def is_valid_id(id):
         """A helper method to check for a valid datastore ID.
 
-        There are actually two types of datastore IDs, which (for want
-        of better terminology) are called local IDs and global IDs.
+        There are actually two types of datastore IDs, which
+        are called private IDs and shareable IDs.
 
-        Local datastores are created with
+        Private datastores are created with
         :meth:`DatastoreManager.open_default_datastore()` or
         :meth:`DatastoreManager.open_or_create_datastore()`,
         and the app has control over the name.
-        Valid local datastore IDs are 1-32 characters long and
+        Valid private datastore IDs are 1-64 characters long and
         may contain the following characters: ``a-z 0-9 . - _`` .
         However the first and last character cannot be dots.  Note
         that upper case is not allowed.
 
-        Global datastores are created with
+        Shareable datastores are created with
         :meth:`DatastoreManager.create_datastore()`; the
         name is a dot followed by a random-looking sequence of
-        characters assigned by the SDK.  Valid global datastore IDs
-        are a dot followed by 1-100 dbase64 characters (which are
+        characters assigned by the SDK.  Valid shareable datastore IDs
+        are a dot followed by 1-63 dbase64 characters (which are
         ``a-z A-Z 0-9 - _``).  Note that upper case *is* allowed.
 
         The :meth:`DatastoreManager.open_datastore()` and
@@ -624,9 +858,29 @@ class Datastore(object):
         """
         return bool(re.match(_VALID_DSID_RE, id))
 
+    @staticmethod
+    def is_valid_shareable_id(id):
+        """A helper method to check for a valid shareable datastore ID.
+
+        This is a valid datastore ID starting with a '.'.
+        """
+        return Datastore.is_valid_id(id) and id.startswith('.')
+
     def get_id(self):
         """Return the ID of this datastore (a string)."""
         return self._id
+
+    def is_shareable(self):
+        """Return whether this is a shareable datastore."""
+        return self._id.startswith('.')
+
+    def is_writable(self):
+        """Return whether this datastore is writable.
+
+        Always true for private datastores.
+        False iff role==:const:`VIEWER` for shareable datastores.
+        """
+        return self._role != Datastore.VIEWER
 
     def get_handle(self):
         """Return the handle of this datastore (a string)."""
@@ -654,7 +908,7 @@ class Datastore(object):
     def get_title(self):
         """Return the title of this datastore (a string or None).
 
-        The title is primarily useful for apps that use global
+        The title is primarily useful for apps that use shareable
         datastores to represent documents created by the user.  Using
         :meth:`set_title()` the title can be set to a string chosen by
         the user, and :meth:`DatastoreManager.list_datastores()` will
@@ -693,6 +947,134 @@ class Datastore(object):
         info_record = info_table.get_or_insert('info')
         info_record.set(field, value)
 
+    def get_record_count(self):
+        """Return the number of records in this datastore."""
+        return self._record_count
+
+    def get_size(self):
+        """Return the size in bytes of this datastore.
+
+        The overall size of a datastore is calculated by summing the
+        size of all records, plus the base size of an empty datastore itself.
+        """
+        return self._size
+
+    def get_pending_changes_size(self):
+        """Return the size in bytes of changes made since the last :meth:`commit()`.
+
+        If there are any pending changes, the total size is given by summing the size
+        of those changes and :const:`BASE_DELTA_SIZE`. If there are no pending
+        changes, the total size is zero.
+        """
+        if self._changes:
+            return Datastore.BASE_DELTA_SIZE + self._pending_changes_size
+        else:
+            return 0
+
+    def _add_pending_change(self, change):
+        self._changes.append(change)
+        self._pending_changes_size += change.size()
+
+    def get_effective_role(self):
+        """Return the effective role for the current user.
+
+        This can return :const:`OWNER`, :const:`EDITOR` or
+        :const:`VIEWER`.
+
+        For a private datastore this always returns :const:`OWNER`.
+        """
+        if self.is_shareable():
+            return self._role
+        else:
+            return Datastore.OWNER
+
+    def list_roles(self):
+        """Return the full ACL, as a dict mapping principals to roles.
+
+        This is only supported for shareable datastores.
+        """
+        self._check_shareable()
+        acl_table = self.get_table(':acl')
+        acl = {}
+        for rec in acl_table.query():
+            id = rec.get_id()
+            if id == 'team':
+                principal = Datastore.TEAM
+            elif id == 'public':
+                principal = Datastore.PUBLIC
+            elif id.startswith('u') and id[1:].isdigit():
+                principal = User(id[1:])
+            else:
+                continue  # pragma: nocover.
+            acl[principal] = _make_role(rec.get('role'))
+        return acl
+
+    def get_role(self, principal):
+        """Return the role for a principal.
+
+        This can return :const:`OWNER`, :const:`EDITOR`,
+        :const:`VIEWER`, or ``None``.
+
+        The principal must be :const:`TEAM` or :const:`PUBLIC`.
+
+        This is only supported for shareable datastores.
+
+        This method only returns the role explicitly set for the given
+        principal in the ACL; it is equivalent to
+        ``ds.list_roles().get(principal)``.  The effective role for a
+        principal may be different; it is affected by the full ACL as
+        well as by team membership and ownership.
+
+        To get the effective role for the current user, use
+        :meth:`get_effective_role()`.
+        """
+        self._check_shareable()
+        self._check_principal(principal)
+        acl_table = self.get_table(':acl')
+        rec = acl_table.get(principal.key)
+        if rec is None:
+            return Datastore.NONE
+        else:
+            return _make_role(rec.get('role'))
+
+    def set_role(self, principal, role):
+        """Set a principal's role.
+
+        The principal must be :const:`TEAM` or :const:`PUBLIC`.
+        The role must be :const:`EDITOR` or :const:`VIEWER`.
+
+        If the principal already has a role it is updated.
+
+        This is only supported for writable, shareable datastores.
+        """
+        if role == Datastore.NONE:
+            return self.delete_role(principal)
+        self._check_shareable()
+        self._check_principal(principal)
+        irole = _parse_role(role, owner_ok=False)
+        acl_table = self.get_table(':acl')
+        rec = acl_table.get(principal.key)
+        if rec is None:
+            acl_table.get_or_insert(principal.key, role=irole)
+        else:
+            rec.update(role=irole)
+
+    def delete_role(self, principal):
+        """Delete a principal's role.
+
+        The principal must be :const:`TEAM` or :const:`PUBLIC`.
+
+        The principal may but need not have a role.
+
+        This is only supported for writable, shareable datastores.
+        """
+        self._check_shareable()
+        self._check_principal(principal)
+        acl_table = self.get_table(':acl')
+        rec = acl_table.get(principal.key)
+        if rec is not None:
+            rec.delete_record()
+
     def load_snapshot(self):
         """Load the datastore with a snapshot retrieved from the server.
 
@@ -726,7 +1108,7 @@ class Datastore(object):
             recordid = row['rowid']
             data = dict((field, _value_from_json(v)) for field, v in row['data'].items())
             table = self.get_table(tid)
-            table._records[recordid] = data
+            table._update_record_fields(recordid, data, _compute_record_size_for_fields(data))
         self._rev = rev
 
     def get_snapshot(self):
@@ -771,7 +1153,7 @@ class Datastore(object):
         if self._handle not in subresp['deltas']:
             return {}
         myresp = subresp['deltas'][self._handle]
-        myresp = self._manager._dsops._check_not_found(myresp)
+        myresp = self._manager._dsops._check_access_errors(myresp)
         deltas = myresp.get('deltas')
         return self.apply_deltas(deltas)
 
@@ -911,12 +1293,13 @@ class Datastore(object):
         method is a no-op (and no empty delta will be sent to the
         server).
         """
+        self._check_edit_permission()
         if not self._changes:
             return
         self._set_mtime()
         changes = [ch.to_json() for ch in self._changes]
         nonce = _new_uuid()
-        resp = self._manager._dsops.put_deltas(self._handle, self._rev, changes, nonce)
+        resp = self._manager._dsops.put_delta(self._handle, self._rev, changes, nonce)
         self._rev = resp['rev']
         self._changes = []
 
@@ -1012,28 +1395,37 @@ class Datastore(object):
         table = self.get_table(tid)
         if op == INSERT:
             assert recordid not in table._records, repr((tid, recordid))
-            table._records[recordid] = data
+            table._update_record_fields(recordid, data, _compute_record_size_for_fields(data))
         elif op == DELETE:
-            fields = table._records.pop(recordid, None)
-            change.undo = dict(fields)
+            old_fields = table._records.get(recordid)
+            table._update_record_fields(recordid, None,
+                                        -_compute_record_size_for_fields(old_fields))
+            change.undo = dict(old_fields)
         elif op == UPDATE:
             fields = dict(table._records[recordid])
             undo = {}
+            old_size, new_size = 0, 0
             for field, val in data.items():
-                undo[field] = fields.get(field)
+                old_value = fields.get(field)
+                undo[field] = old_value
+                if old_value is not None:
+                    old_size += _compute_field_size(old_value)
                 assert _is_op(val), repr(val)
                 op = val[0]
                 if op == ValuePut:
                     fields[field] = val[1]
+                    new_size += _compute_field_size(val[1])
                 elif op == ValueDelete:
                     # Silently ignore deletions for non-existing fields.
                     if field in data:
                         del fields[field]
                 elif _is_listop(val):
-                    fields[field] = self._apply_listop(fields.get(field), val)
+                    new_list = self._apply_listop(fields.get(field), val)
+                    fields[field] = new_list
+                    new_size += _compute_field_size(new_list)
                 else:
                     assert False, repr((field, val))  # pragma: no cover
-            table._records[recordid] = fields
+            table._update_record_fields(recordid, fields, new_size - old_size)
             change.undo = undo
         else:
             assert False, repr(change)  # pragma: no cover
@@ -1070,7 +1462,7 @@ class Datastore(object):
         self._changes = None
 
 
-_VALID_ID_RE = r'([a-zA-Z0-9_\-/.+=]{1,32}|:[a-zA-Z0-9_\-/.+=]{1,31})\Z'
+_VALID_ID_RE = r'([a-zA-Z0-9_\-/.+=]{1,64}|:[a-zA-Z0-9_\-/.+=]{1,63})\Z'
 
 
 class Table(object):
@@ -1087,6 +1479,7 @@ class Table(object):
         self._datastore = datastore
         self._tid = tid
         self._records = {}  # Map {recordid: fields}
+        self._record_sizes = {} # Map {recordid: int size}
 
     def __repr__(self):
         return 'Table(<%s>, %r)' % (self._datastore._id, self._tid)
@@ -1095,9 +1488,9 @@ class Table(object):
     def is_valid_id(id):
         """A helper method to check for a valid table ID.
 
-        Valid table IDs are 1-32 characters long and may contain the
+        Valid table IDs are 1-64 characters long and may contain the
         following characters: ``a-z A-Z 0-9 _ - / . + =`` .  Reserved
-        IDs start with a colon followed by 1-31 characters from that set.
+        IDs start with a colon followed by 1-63 characters from that set.
         """
         return bool(re.match(_VALID_ID_RE, id))
 
@@ -1142,15 +1535,18 @@ class Table(object):
         return self._insert_with_id(_new_uuid(), fields)
 
     def _insert_with_id(self, recordid, fields):
+        self._datastore._check_edit_permission()
+        value_size = 0
         for field, value in fields.items():
             if not Record.is_valid_field(field):
                 raise ValueError('Invalid field name %r' % (field,))
             if value is None:
                 raise TypeError('Cannot set field %r to None in insert' % (field,))
             value = _typecheck_value(value, field)
+            value_size += _compute_field_size(value)
             fields[field] = value
-        self._datastore._changes.append(_Change(INSERT, self._tid, recordid, dict(fields)))
-        self._records[recordid] = fields
+        self._datastore._add_pending_change(_Change(INSERT, self._tid, recordid, dict(fields)))
+        self._update_record_fields(recordid, fields, Record.BASE_RECORD_SIZE + value_size)
         return Record(self, recordid)
 
     def query(self, **kwds):
@@ -1206,6 +1602,42 @@ class Table(object):
                 results.add(Record(self, recordid))
         return results
 
+    def _update_record_fields(self, recordid, fields, change_in_size):
+        """Update the fields of the record, or delete the record if fields is None.
+
+        This method updates the fields for the recordid and also updates its cached size in bytes
+        and the cached size of the datastore.
+        """
+        curr_size = self._get_record_size(recordid)
+        is_new_record = (curr_size == 0)
+        curr_size += change_in_size
+        assert curr_size >= 0, 'Invalid size %d for table %s, record %s' % (curr_size, self._tid,
+                                                                            recordid)
+        assert (self._datastore._size + change_in_size >=
+                Datastore.BASE_DATASTORE_SIZE), 'Invalid datastore size %d' % (self._size,)
+        if curr_size:
+            self._record_sizes[recordid] = curr_size
+            self._records[recordid] = fields
+            if is_new_record:
+                self._datastore._record_count += 1
+        else:
+            del self._record_sizes[recordid]
+            del self._records[recordid]
+            self._datastore._record_count -= 1
+        self._datastore._size += change_in_size
+
+    def _get_record_size(self, recordid):
+        record_size = self._record_sizes.get(recordid)
+        if not record_size:
+            fields = self._records.get(recordid)
+            # The values in this cache are maintained through _update_record_fields.  There is no
+            # case in which a record with fields exists without having its size set properly in
+            # the cache.
+            assert fields is None, 'Record %r exists %r but has no cached size' % (recordid,
+                                                                                   fields)
+            record_size = 0
+        return record_size
+
 
 class Record(object):
     """An object representing a record in a table in a datastore.
@@ -1227,6 +1659,30 @@ class Record(object):
     :meth:`Table.get()`, :meth:`Table.insert()`,
     :meth:`Table.get_or_insert()` or :meth:`Table.query()` instead.
     """
+
+    RECORD_SIZE_LIMIT = 100 * 1024  #: Record size limit placeholder for sphinx.
+    _RECORD_SIZE_LIMIT__doc__ = """
+        The maximum size in bytes of a record.
+        """
+
+    BASE_RECORD_SIZE = 100  #: Base record size placeholder for sphinx.
+    _BASE_RECORD_SIZE__doc__ = """
+        The size in bytes of a record before accounting for the sizes of its fields.
+
+        The overall size of a record is this value plus the sum of the sizes of its fields.
+        """
+
+    BASE_FIELD_SIZE = 100  #: Base field size placeholder for sphinx.
+    _BASE_FIELD_SIZE__doc__ = """
+        The size in bytes of a field before accounting for the sizes of its values.
+
+        The overall size of a field is this value plus:
+
+        - For string and :class:`Bytes`: the length in bytes of the value.
+        - For :class:`List`: the sum of the size of each list item, where each item's size
+          is computed as the size of the item value plus :const:`List.BASE_ITEM_SIZE`.
+        - For other atomic types: no additional contribution to the size of the field.
+        """
 
     def __init__(self, table, recordid):
         self._table = table
@@ -1258,9 +1714,9 @@ class Record(object):
     def is_valid_id(id):
         """A helper method to check for a valid record ID.
 
-        Valid record IDs are 1-32 characters long and may contain the
+        Valid record IDs are 1-64 characters long and may contain the
         following characters: ``a-z A-Z 0-9 _ - / . + =`` .  Reserved
-        IDs start with a colon followed by 1-31 characters from that set.
+        IDs start with a colon followed by 1-63 characters from that set.
         """
         return bool(re.match(_VALID_ID_RE, id))
 
@@ -1268,9 +1724,9 @@ class Record(object):
     def is_valid_field(field):
         """A helper method to check for a valid field name.
 
-        Valid field names are 1-32 characters long and may contain the
+        Valid field names are 1-64 characters long and may contain the
         following characters: ``a-z A-Z 0-9 _ - / . + =`` .  Reserved
-        field names start with a colon followed by 1-31 characters
+        field names start with a colon followed by 1-63 characters
         from that set.
         """
         return bool(re.match(_VALID_ID_RE, field))
@@ -1282,6 +1738,15 @@ class Record(object):
     def get_table(self):
         """Return the :class:`Table` to which this record belongs."""
         return self._table
+
+    def get_size(self):
+        """Return the size in bytes of this record.
+
+        The overall size of a record is calculated by summing the
+        size of all values in all fields, plus the base size of an empty
+        record itself.  A deleted record has a size of zero.
+        """
+        return self._table._get_record_size(self._recordid)
 
     def get(self, field):
         """Return the value of a field in the record.
@@ -1336,29 +1801,36 @@ class Record(object):
         the corresponding value, except that if the value is ``None``, the
         field is deleted.
         """
+        self._datastore._check_edit_permission()
         fields = self._table._records.get(self._recordid)
         if fields is None:
             raise DatastoreError('Cannot update a deleted record')
         fields = dict(fields)
         data = {}
         undo = {}
+        old_size, new_size = 0, 0
         for field, value in kwds.items():
             if not Record.is_valid_field(field):
                 raise ValueError('Invalid field name %r' % (field,))
             if value is None:
-                if field in fields:
-                    undo[field] = fields.get(field)
+                old_value = fields.get(field)
+                if old_value:
+                    undo[field] = old_value
+                    old_size += _compute_field_size(old_value)
                     del fields[field]
                     data[field] = [ValueDelete]
             else:
-                undo[field] = fields.get(field)
+                old_value = fields.get(field)
+                undo[field] = old_value
+                old_size += _compute_field_size(old_value)
                 value = _typecheck_value(value, field)
                 fields[field] = value
+                new_size += _compute_field_size(value)
                 data[field] = [ValuePut, value]
         if data:
             change = _Change(UPDATE, self._table._tid, self._recordid, data=data, undo=undo)
-            self._table._datastore._changes.append(change)
-            self._table._records[self._recordid] = fields
+            self._table._datastore._add_pending_change(change)
+            self._table._update_record_fields(self._recordid, fields, new_size - old_size)
 
     def delete_record(self):
         """Delete the record from the table.
@@ -1369,12 +1841,13 @@ class Record(object):
         modified, and no longer has any fields.  To check for a
         deleted record, use :meth:`is_deleted()`.
         """
+        self._datastore._check_edit_permission()
         fields = self._table._records.get(self._recordid)
         if fields is None:
             return
         change = _Change(DELETE, self._table._tid, self._recordid, data=None, undo=fields)
-        self._table._datastore._changes.append(change)
-        del self._table._records[self._recordid]
+        self._table._datastore._add_pending_change(change)
+        self._table._update_record_fields(self._recordid, None, -self.get_size())
 
     def get_or_create_list(self, field):
         """Get a list field, possibly setting it to an empty list.
@@ -1394,13 +1867,14 @@ class Record(object):
                             (field, type(v).__name__))
         if not Record.is_valid_field(field):
             raise ValueError('Invalid field name %r' % (field,))
+        self._datastore._check_edit_permission()
         # Produce a ListCreate op.
         data = {field: _make_list_create()}
         change = _Change(UPDATE, self._table._tid, self._recordid, data=data, undo={field: None})
-        self._table._datastore._changes.append(change)
+        self._table._datastore._add_pending_change(change)
         fields = dict(fields)
         fields[field] = ()
-        self._table._records[self._recordid] = fields
+        self._table._update_record_fields(self._recordid, fields, self.BASE_FIELD_SIZE)
         return List(self, field)
 
     def has(self, field):
@@ -1442,7 +1916,6 @@ class Date(object):
     milliseconds map to fractions when converting to/from ``float``,
     and are truncated when converting to ``int``.
 
-    
     You can also convert between Date and naive (``tzinfo``-less) ``datetime``
     objects using a choice of UTC or local time, using
     :meth:`to_datetime_utc()`, :meth:`from_datetime_utc()`,
@@ -1464,7 +1937,7 @@ class Date(object):
             if not isinstance(timestamp, (float, int, long)):
                 raise TypeError('Timestamp must be a float or integer, not %s' %
                                 type(timestamp).__name__)
-        self._timestamp = float(timestamp)
+        self._timestamp = int(timestamp*1000.0) / 1000.0
 
     def __repr__(self):
         dt = datetime.datetime.utcfromtimestamp(int(self._timestamp))
@@ -1650,6 +2123,9 @@ class Bytes(object):
             return self._bytes >= other._bytes
         return NotImplemented
 
+    def __len__(self):
+        return len(self._bytes)
+
     # JSON encoding used by protocol.
 
     def to_json(self):
@@ -1692,6 +2168,13 @@ class List(collections.MutableSequence):
     **Do not instantiate this class directly**.  Use
     :meth:`Record.get()` or :meth:`Record.get_or_create_list()` instead.
     """
+
+    BASE_ITEM_SIZE = 20  #: Base list item size placeholder for sphinx.
+    _BASE_ITEM_SIZE__doc__ = """
+        The size in bytes of a list item.
+
+        The overall size of a list item is this value plus the size of the item value.
+        """
 
     def __init__(self, record, field):
         self._table = record._table
@@ -1831,16 +2314,19 @@ class List(collections.MutableSequence):
         self._update(v, _make_list_move(index, newindex))
 
     def _update(self, v, op):
+        self._table._datastore._check_edit_permission()
         table = self._table
         recordid = self._recordid
         field = self._field
         fields = table._records[recordid]
+        old_v = fields.get(field)
         change = _Change(UPDATE, table._tid, recordid,
-                         data={field: op}, undo={field: fields.get(field)})
-        table._datastore._changes.append(change)
+                         data={field: op}, undo={field: old_v})
+        table._datastore._add_pending_change(change)
         fields = dict(fields)
         fields[field] = v
-        table._records[recordid] = fields
+        table._update_record_fields(recordid, fields,
+                                    _compute_value_size(v) - _compute_value_size(old_v))
 
 
 VALID_ATOM_TYPES = frozenset([
@@ -1878,6 +2364,60 @@ def _typecheck_atom(value, field, is_list=False):
         # If this raises UnicodeDecodeError your data is not in UTF-8 format.
         value = value.decode('utf-8')
     return value
+
+
+def _compute_record_size_for_fields(fields):
+    """Compute the size in bytes of a record containing the given fields."""
+    return Record.BASE_RECORD_SIZE + sum(map(_compute_field_size, fields.itervalues()))
+
+
+def _compute_field_size(value):
+    """Compute the size in bytes of a field with the given value.
+
+    Returns 0 when field is None.
+    """
+    if value is None:
+        return 0
+    return Record.BASE_FIELD_SIZE + _compute_value_size(value)
+
+
+def _compute_value_size(value):
+    """Compute the size in bytes of the value.
+
+    Sizes are computed as follows:
+      String: length of the (utf-8) string.
+      Bytes:  length in bytes.
+      List:   sum of (:const:`List.LIST_VALUE_SIZE` + atom value) for each value in the list.
+      Others: free
+    """
+    if isinstance(value, (List, list, tuple)):
+        return _compute_list_size(value)
+    else:
+        return _compute_atom_size(value)
+
+
+def _compute_list_size(value):
+    return (len(value) * List.BASE_ITEM_SIZE) + sum(map(_compute_atom_size, value))
+
+
+def _compute_atom_size(value):
+    if value is None:
+        return 0
+    if isinstance(value, (int, long, bool, float, Date)):
+        return 0
+    if PY3:  # pragma: no cover
+        if isinstance(value, str):
+            value = value.encode('utf-8')
+        if isinstance(value, bytes):
+            return len(value)
+    else:
+        if isinstance(value, unicode):
+            value = value.encode('utf-8')
+        if isinstance(value, str):
+            return len(value)
+    if isinstance(value, Bytes):
+        return len(value)
+    assert False, 'Type %r is not a valid atom (value: %r)' % (type(value), value)
 
 
 # Change ops.
@@ -1930,6 +2470,19 @@ class _Change(object):
 
     def without_undo(self):
         return _Change(self.op, self.tid, self.recordid, self.data)
+
+    def size(self):
+        change_size = Datastore.BASE_CHANGE_SIZE
+        if self.op == INSERT:
+            change_size += sum((Record.BASE_FIELD_SIZE + _compute_value_size(val))
+                               for val in self.data.itervalues())
+        elif self.op == UPDATE:
+            for field_op in self.data.itervalues():
+                change_size += Record.BASE_FIELD_SIZE
+                op_value = _get_op_value(field_op)
+                if op_value is not None:
+                    change_size += _compute_value_size(op_value)
+        return change_size
 
     def invert(self):
         if self.op == UPDATE:
@@ -2121,6 +2674,16 @@ def _op_to_json(val):
     if opid in (ListPut, ListInsert):
         return [opid, val[1], _value_to_json(val[2])]
     return list(val)
+
+
+def _get_op_value(op):
+    assert _is_op(op), repr(op)
+    opid = op[0]
+    if opid == ValuePut:
+        return op[1]
+    if opid in (ListPut, ListInsert):
+        return op[2]
+    return None
 
 
 def _is_op(val):

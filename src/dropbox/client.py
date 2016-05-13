@@ -19,7 +19,7 @@ try:
 except ImportError:
     import simplejson as json
 
-from .rest import ErrorResponse, RESTClient
+from .rest import ErrorResponse, RESTClient, params_to_urlencoded
 from .session import BaseSession, DropboxSession, DropboxOAuth2Session
 
 
@@ -59,7 +59,8 @@ class DropboxClient(object):
 
         Parameters
           oauth2_access_token
-            An OAuth 2 access token (string).
+            An OAuth 2 access token (string).  For backwards compatibility this may
+            also be a DropboxSession object (see :meth:`create_oauth2_access_token()`).
           locale
             The locale of the user of your application.  For example "en" or "en_US".
             Some API calls return localized data and error messages; this setting
@@ -84,7 +85,8 @@ class DropboxClient(object):
             raise ValueError("'oauth2_access_token' must either be a string or a DropboxSession")
         self.rest_client = rest_client
 
-    def request(self, target, params=None, method='POST', content_server=False):
+    def request(self, target, params=None, method='POST',
+                content_server=False, notification_server=False):
         """
         An internal method that builds the url, headers, and params for a Dropbox API request.
         It is exposed if you need to make API calls not implemented in this library or if you
@@ -101,16 +103,28 @@ class DropboxClient(object):
               A boolean indicating whether the request is to the
               API content server, for example to fetch the contents of a file
               rather than its metadata.
+            notification_server
+              A boolean indicating whether the request is to the API notification
+              server, for example for longpolling.
 
         Returns
               A tuple of ``(url, params, headers)`` that should be used to make the request.
               OAuth will be added as needed within these fields.
         """
         assert method in ['GET','POST', 'PUT'], "Only 'GET', 'POST', and 'PUT' are allowed."
+        assert not (content_server and notification_server), \
+            "Cannot construct request simultaneously for content and notification servers."
+
         if params is None:
             params = {}
 
-        host = self.session.API_CONTENT_HOST if content_server else self.session.API_HOST
+        if content_server:
+            host = self.session.API_CONTENT_HOST
+        elif notification_server:
+            host = self.session.API_NOTIFICATION_HOST
+        else:
+            host = self.session.API_HOST
+
         base = self.session.build_url(host, target)
         headers, params = self.session.build_access_headers(method, base, params)
 
@@ -148,6 +162,18 @@ class DropboxClient(object):
         If this ``DropboxClient`` was created with an OAuth 1 access token, this method
         can be used to create an equivalent OAuth 2 access token.  This can be used to
         upgrade your app's existing access tokens from OAuth 1 to OAuth 2.
+
+        Example::
+
+            from dropbox.client import DropboxClient
+            from dropbox.session import DropboxSession
+            session = DropboxSession(APP_KEY, APP_SECRET)
+            access_key, access_secret = '123abc', 'xyz456'  # Previously obtained OAuth 1 credentials
+            session.set_token(access_key, access_secret)
+            client = DropboxClient(session)
+            token = client.create_oauth2_access_token()
+            # Optionally, create a new client using the new token
+            new_client = DropboxClient(token)
         """
         if not isinstance(self.session, DropboxSession):
             raise ValueError("This call requires a DropboxClient that is configured with an "
@@ -186,19 +212,32 @@ class DropboxClient(object):
         """
         return ChunkedUploader(self, file_obj, length)
 
-    def upload_chunk(self, file_obj, length, offset=0, upload_id=None):
-        """Uploads a single chunk of data from the given file like object. The majority of users
-        should use the ChunkedUploader object, which provides a simpler interface to the
+    def upload_chunk(self, file_obj, length=None, offset=0, upload_id=None):
+        """Uploads a single chunk of data from a string or file-like object. The majority of users
+        should use the :class:`ChunkedUploader` object, which provides a simpler interface to the
         chunked_upload API endpoint.
 
         Parameters
             file_obj
-              The source of the data to upload.
+              The source of the chunk to upload; a file-like object or a string.
             length
-              The number of bytes to upload in one chunk.
+              This argument is ignored but still present for backward compatibility reasons.
+            offset
+              The byte offset to which this source data corresponds in the original file.
+            upload_id
+              The upload identifier for which this chunk should be uploaded,
+              returned by a previous call, or None to start a new upload.
 
         Returns
-              The reply from the server, as a dictionary.
+            A dictionary containing the keys:
+
+            upload_id
+              A string used to identify the upload for subsequent calls to :meth:`upload_chunk()`
+              and :meth:`commit_chunked_upload()`.
+            offset
+              The offset at which the next upload should be applied.
+            expires
+              The time after which this partial upload is invalid.
         """
 
         params = dict()
@@ -215,6 +254,53 @@ class DropboxClient(object):
             return reply['offset'], reply['upload_id']
         except ErrorResponse as e:
             raise e
+
+    def commit_chunked_upload(self, full_path, upload_id, overwrite=False, parent_rev=None):
+        """Commit the previously uploaded chunks for the given path.
+
+        Parameters
+            full_path
+              The full path to which the chunks are uploaded, *including the file name*.
+              If the destination folder does not yet exist, it will be created.
+            upload_id
+              The chunked upload identifier, previously returned from upload_chunk.
+            overwrite
+              Whether to overwrite an existing file at the given path. (Default ``False``.)
+              If overwrite is False and a file already exists there, Dropbox
+              will rename the upload to make sure it doesn't overwrite anything.
+              You need to check the metadata returned for the new name.
+              This field should only be True if your intent is to potentially
+              clobber changes to a file that you don't know about.
+            parent_rev
+              Optional rev field from the 'parent' of this upload.
+              If your intent is to update the file at the given path, you should
+              pass the parent_rev parameter set to the rev value from the most recent
+              metadata you have of the existing file at that path. If the server
+              has a more recent version of the file at the specified path, it will
+              automatically rename your uploaded file, spinning off a conflict.
+              Using this parameter effectively causes the overwrite parameter to be ignored.
+              The file will always be overwritten if you send the most recent parent_rev,
+              and it will never be overwritten if you send a less recent one.
+
+        Returns
+            A dictionary containing the metadata of the newly committed file.
+
+            For a detailed description of what this call returns, visit:
+            https://www.dropbox.com/developers/core/docs#commit-chunked-upload
+        """
+
+        params = {
+            'upload_id': upload_id,
+            'overwrite': overwrite,
+            }
+
+        if parent_rev is not None:
+            params['parent_rev'] = parent_rev
+
+        url, params, headers = self.request("/commit_chunked_upload/%s" % full_path,
+                                            params, content_server=True)
+
+        return self.rest_client.POST(url, params, headers)
 
     def put_file(self, full_path, file_obj, overwrite=False, parent_rev=None):
         """Upload a file.
@@ -244,7 +330,7 @@ class DropboxClient(object):
         Parameters
             full_path
               The full path to upload the file to, *including the file name*.
-              If the destination directory does not yet exist, it will be created.
+              If the destination folder does not yet exist, it will be created.
             file_obj
               A file-like object to upload. If you would like, you can pass a string as file_obj.
             overwrite
@@ -262,8 +348,8 @@ class DropboxClient(object):
               has a more recent version of the file at the specified path, it will
               automatically rename your uploaded file, spinning off a conflict.
               Using this parameter effectively causes the overwrite parameter to be ignored.
-              The file will always be overwritten if you send the most-recent parent_rev,
-              and it will never be overwritten if you send a less-recent one.
+              The file will always be overwritten if you send the most recent parent_rev,
+              and it will never be overwritten if you send a less recent one.
 
         Returns
               A dictionary containing the metadata of the newly uploaded file.
@@ -290,13 +376,13 @@ class DropboxClient(object):
 
         return self.rest_client.PUT(url, file_obj, headers)
 
-    def get_file(self, from_path, rev=None):
+    def get_file(self, from_path, rev=None, start=None, length=None):
         """Download a file.
 
         Example::
 
-            out = open('magnum-opus.txt', 'w')
-            with client.get_file('/magnum-opus.txt').read() as f:
+            out = open('magnum-opus.txt', 'wb')
+            with client.get_file('/magnum-opus.txt') as f:
                 out.write(f.read())
 
         which would download the file ``magnum-opus.txt`` and write the contents into
@@ -307,7 +393,11 @@ class DropboxClient(object):
               The path to the file to be downloaded.
             rev
               Optional previous rev value of the file to be downloaded.
-
+            start
+              Optional byte value from which to start downloading.
+            length
+              Optional length in bytes for partially downloading the file. If ``length`` is
+              specified but ``start`` is not, then the last ``length`` bytes will be downloaded.
         Returns
               A :class:`dropbox.rest.RESTResponse` that is the HTTP response for
               the API request.  It is a file-like object that can be read from.  You
@@ -327,6 +417,13 @@ class DropboxClient(object):
             params['rev'] = rev
 
         url, params, headers = self.request(path, params, method='GET', content_server=True)
+        if start is not None:
+            if length:
+              headers['Range'] = 'bytes=%s-%s' % (start, start + length - 1)
+            else:
+              headers['Range'] = 'bytes=%s-' % start
+        elif length is not None:
+            headers['Range'] = 'bytes=-%s' % length
         return self.rest_client.request("GET", url, headers=headers, raw_response=True)
 
     def get_file_and_metadata(self, from_path, rev=None):
@@ -337,7 +434,7 @@ class DropboxClient(object):
 
         A typical usage looks like this::
 
-            out = open('magnum-opus.txt', 'w')
+            out = open('magnum-opus.txt', 'wb')
             f, metadata = client.get_file_and_metadata('/magnum-opus.txt')
             with f:
                 out.write(f.read())
@@ -385,7 +482,7 @@ class DropboxClient(object):
         if not metadata: raise ErrorResponse(dropbox_raw_response)
         return metadata
 
-    def delta(self, cursor=None, path_prefix=None):
+    def delta(self, cursor=None, path_prefix=None, include_media_info=False):
         """A way of letting you keep up with changes to files and folders in a
         user's Dropbox.  You can periodically call delta() to get a list of "delta
         entries", which are instructions on how to update your local state to
@@ -402,6 +499,13 @@ class DropboxClient(object):
             fixed for a given cursor.  Whatever ``path_prefix`` you use on the first
             ``delta()`` must also be passed in on subsequent calls that use the returned
             cursor.
+          include_media_info
+            If True, delta will return additional media info for photos and videos
+            (the time a photo was taken, the GPS coordinates of a photo, etc.). There
+            is a delay between when a file is uploaded to Dropbox and when this
+            information is available; delta will only include a file in the changelist
+            once its media info is ready. The value you use on the first ``delta()`` must
+            also be passed in on subsequent calls that use the returned cursor.
 
         Returns
           A dict with four keys:
@@ -448,7 +552,7 @@ class DropboxClient(object):
         """
         path = "/delta"
 
-        params = {}
+        params = {'include_media_info': include_media_info}
         if cursor is not None:
             params['cursor'] = cursor
         if path_prefix is not None:
@@ -457,6 +561,53 @@ class DropboxClient(object):
         url, params, headers = self.request(path, params)
 
         return self.rest_client.POST(url, params, headers)
+
+    def longpoll_delta(self, cursor, timeout=None):
+        """A long-poll endpoint to wait for changes on an account. In conjunction with
+        :meth:`delta()`, this call gives you a low-latency way to monitor an account for
+        file changes.
+
+        Note that this call goes to ``api-notify.dropbox.com`` instead of ``api.dropbox.com``.
+
+        Unlike most other API endpoints, this call does not require OAuth authentication.
+        The passed-in cursor can only be acquired via an authenticated call to :meth:`delta()`.
+
+        Parameters
+          cursor
+            A delta cursor as returned from a call to :meth:`delta()`. Note that a cursor
+            returned from a call to :meth:`delta()` with ``include_media_info=True`` is
+            incompatible with ``longpoll_delta()`` and an error will be returned.
+          timeout
+            An optional integer indicating a timeout, in seconds. The default value is
+            30 seconds, which is also the minimum allowed value. The maximum is 480
+            seconds. The request will block for at most this length of time, plus up
+            to 90 seconds of random jitter added to avoid the thundering herd problem.
+            Care should be taken when using this parameter, as some network
+            infrastructure does not support long timeouts.
+
+        Returns
+            The connection will block until there are changes available or a timeout occurs.
+            The response will be a dictionary that looks like the following example::
+
+              {"changes": false, "backoff": 60}
+
+            For a detailed description of what this call returns, visit:
+            https://www.dropbox.com/developers/core/docs#longpoll-delta
+
+        Raises
+              A :class:`dropbox.rest.ErrorResponse` with an HTTP status of:
+
+              - 400: Bad request (generally due to an invalid parameter; check e.error for details).
+        """
+        path = "/longpoll_delta"
+
+        params = {'cursor': cursor}
+        if timeout is not None:
+            params['timeout'] = timeout
+
+        url, params, headers = self.request(path, params, method='GET', notification_server=True)
+
+        return self.rest_client.GET(url, headers)
 
     def create_copy_ref(self, from_path):
         """Creates and returns a copy ref for a specific file.  The copy ref can be
@@ -523,9 +674,9 @@ class DropboxClient(object):
               A :class:`dropbox.rest.ErrorResponse` with an HTTP status of:
 
               - 400: Bad request (may be due to many things; check e.error for details).
-              - 403: An invalid move operation was attempted
+              - 403: An invalid copy operation was attempted
                 (e.g. there is already a file at the given destination,
-                or moving a shared folder into a shared folder).
+                or trying to copy a shared folder).
               - 404: No file was found at given from_path.
               - 503: User over storage quota.
         """
@@ -599,7 +750,7 @@ class DropboxClient(object):
               This parameter should include the destination filename (e.g. if
               ``from_path`` is ``'/test.txt'``, ``to_path`` might be
               ``'/dir/test.txt'``). If there's already a file at the
-              ``to_path``, this file or folder will be renamed to be unique.
+              ``to_path`` it will raise an ErrorResponse.
 
         Returns
               A dictionary containing the metadata of the new copy of the file or folder.
@@ -611,6 +762,9 @@ class DropboxClient(object):
               A :class:`dropbox.rest.ErrorResponse` with an HTTP status of:
 
               - 400: Bad request (may be due to many things; check e.error for details).
+              - 403: An invalid move operation was attempted
+                (e.g. there is already a file at the given destination,
+                or moving a shared folder into a shared folder).
               - 404: No file was found at given from_path.
               - 503: User over storage quota.
         """
@@ -623,7 +777,7 @@ class DropboxClient(object):
         return self.rest_client.POST(url, params, headers)
 
     def metadata(self, path, list=True, file_limit=25000, hash=None,
-                 rev=None, include_deleted=False):
+                 rev=None, include_deleted=False, include_media_info=False):
         """Retrieve metadata for a file or folder.
 
         A typical use would be::
@@ -631,7 +785,7 @@ class DropboxClient(object):
             folder_metadata = client.metadata('/')
             print "metadata:", folder_metadata
 
-        which would return the metadata of the root directory. This
+        which would return the metadata of the root folder. This
         will look something like::
 
             {
@@ -672,7 +826,7 @@ class DropboxClient(object):
                 'thumb_exists': False
             }
 
-        In this example, the root directory contains two things: ``Sample Folder``,
+        In this example, the root folder contains two things: ``Sample Folder``,
         which is a folder, and ``/magnum-opus.txt``, which is a text file 77 bytes long
 
         Parameters
@@ -683,11 +837,11 @@ class DropboxClient(object):
               path refers to a folder).
             file_limit
               The maximum number of file entries to return within
-              a folder. If the number of files in the directory exceeds this
+              a folder. If the number of files in the folder exceeds this
               limit, an exception is raised. The server will return at max
               25,000 files within a folder.
             hash
-              Every directory listing has a hash parameter attached that
+              Every folder listing has a hash parameter attached that
               can then be passed back into this function later to save on
               bandwidth. Rather than returning an unchanged folder's contents,
               the server will instead return a 304.
@@ -697,6 +851,10 @@ class DropboxClient(object):
               the most recent revision metadata.
             include_deleted
               When listing contained files, include files that have been deleted.
+            include_media_info
+              If True, includes additional media info for photos and videos if
+              available (the time a photo was taken, the GPS coordinates of a photo,
+              etc.).
 
         Returns
               A dictionary containing the metadata of the file or folder
@@ -708,7 +866,7 @@ class DropboxClient(object):
         Raises
               A :class:`dropbox.rest.ErrorResponse` with an HTTP status of:
 
-              - 304: Current directory hash matches hash parameters, so contents are unchanged.
+              - 304: Current folder hash matches hash parameters, so contents are unchanged.
               - 400: Bad request (may be due to many things; check e.error for details).
               - 404: No file was found at given path.
               - 406: Too many file entries to return.
@@ -718,6 +876,7 @@ class DropboxClient(object):
         params = {'file_limit': file_limit,
                   'list': 'true',
                   'include_deleted': include_deleted,
+                  'include_media_info': include_media_info,
                   }
 
         if not list:
@@ -812,11 +971,11 @@ class DropboxClient(object):
         return thumbnail_res, metadata
 
     def search(self, path, query, file_limit=1000, include_deleted=False):
-        """Search directory for filenames matching query.
+        """Search folder for filenames matching query.
 
         Parameters
             path
-              The directory to search within.
+              The folder to search within.
             query
               The query to search on (minimum 3 characters).
             file_limit
@@ -1017,11 +1176,16 @@ class ChunkedUploader(object):
                     StringIO(self.last_block), next_chunk_size, self.offset, self.upload_id)
                 self.last_block = None
             except ErrorResponse as e:
-                reply = e.body
-                if "offset" in reply and reply['offset'] != 0:
-                    if reply['offset'] > self.offset:
+                # Handle the case where the server tells us our offset is wrong.
+                must_reraise = True
+                if e.status == 400:
+                    reply = e.body
+                    if "offset" in reply and reply['offset'] != 0 and reply['offset'] > self.offset:
                         self.last_block = None
                         self.offset = reply['offset']
+                        must_reraise = False
+                if must_reraise:
+                    raise
 
     def finish(self, path, overwrite=False, parent_rev=None):
         """Commits the bytes uploaded by this ChunkedUploader to a file
@@ -1045,8 +1209,8 @@ class ChunkedUploader(object):
               has a more recent version of the file at the specified path, it will
               automatically rename your uploaded file, spinning off a conflict.
               Using this parameter effectively causes the overwrite parameter to be ignored.
-              The file will always be overwritten if you send the most-recent parent_rev,
-              and it will never be overwritten if you send a less-recent one.
+              The file will always be overwritten if you send the most recent parent_rev,
+              and it will never be overwritten if you send a less recent one.
         """
 
         path = "/commit_chunked_upload/%s%s" % (self.client.session.root, format_path(path))
@@ -1131,7 +1295,8 @@ class DropboxOAuth2FlowBase(object):
             params['locale'] = self.locale
 
         if params:
-            return "/%s%s?%s" % (BaseSession.API_VERSION, target_path, urllib.urlencode(params))
+            query_string = params_to_urlencoded(params)
+            return "/%s%s?%s" % (BaseSession.API_VERSION, target_path, query_string)
         else:
             return "/%s%s" % (BaseSession.API_VERSION, target_path)
 
