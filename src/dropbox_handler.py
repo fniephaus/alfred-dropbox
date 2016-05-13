@@ -25,21 +25,24 @@ def main(wf):
         except PasswordNotFound:
             pass
 
-    if access_token != '' and command == "share":
-        return share_path(path, access_token)
-    elif access_token != '' and command == "download":
-        return download_path(path, access_token)
-    elif access_token != '' and command == "desktop":
-        return download_path(path, access_token, '~/Desktop/')
-    elif access_token != '' and command == "delete":
-        return delete_path(path, access_token)
-    elif command == "url":
-        webbrowser.open(query)
-        return 0
-    elif command == "auth":
-        return authorize(query)
-    elif command == "remove":
-        return remove(query)
+    if access_token:
+        if command == "share":
+            return share_path(path, access_token)
+        elif command == "download":
+            return download_path(path, access_token)
+        elif command == "desktop":
+            return download_path(path, access_token, '~/Desktop/')
+        elif command == "delete":
+            return delete_path(path, access_token)
+        elif command == "url":
+            webbrowser.open(query)
+            return 0
+        elif command == "auth":
+            return authorize(query)
+        elif command == "remove":
+            return remove(query)
+        else:
+            print 'invalid command'
 
     print 'An error occured.'
     return 0
@@ -58,13 +61,14 @@ def share_path(path, access_token):
         print 'Link copied to clipboard'
 
     except rest.ErrorResponse, e:
-        print e.user_error_msg or str(e)
+        print (e.user_error_msg or str(e))
 
     return 0
 
 
 def download_path(path, access_token, target='~/Downloads/'):
     api_client = client.DropboxClient(access_token)
+
     try:
         filename = os.path.basename(path)
         to_file_path = os.path.expanduser('%s%s' % (target, filename))
@@ -109,8 +113,7 @@ def authorize(auth_code):
 
         access_tokens = {}
         try:
-            access_tokens = json.loads(
-                wf.get_password('dropbox_access_tokens'))
+            access_tokens = json.loads( wf.get_password('dropbox_access_tokens'))
         except PasswordNotFound:
             pass
 
