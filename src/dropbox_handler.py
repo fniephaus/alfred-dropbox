@@ -42,7 +42,7 @@ def main(wf):
         elif command == "remove":
             return remove(query)
         else:
-            print 'invalid command'
+            print 'Invalid command: %s' % command
 
     print 'An error occured.'
     return 0
@@ -97,7 +97,7 @@ def download_path(path, access_token, target='~/Downloads/'):
 def delete_path(path, access_token):
     api_client = client.DropboxClient(access_token)
     try:
-        self.api_client.file_delete(path)
+        api_client.file_delete(path)
         print 'File deleted successfully'
     except rest.ErrorResponse, e:
         print e.user_error_msg or str(e)
@@ -113,7 +113,7 @@ def authorize(auth_code):
 
         access_tokens = {}
         try:
-            access_tokens = json.loads( wf.get_password('dropbox_access_tokens'))
+            access_tokens = json.loads(wf.get_password('dropbox_access_tokens'))
         except PasswordNotFound:
             pass
 
