@@ -29,7 +29,7 @@ def get_resource(uid, path):
 
 
 def get_hash(uid, path):
-    return "_".join([uid, hashlib.md5(path).hexdigest()])
+    return "_".join([uid, hashlib.md5(path.encode('utf-8')).hexdigest()])
 
 
 def get_account_info():
