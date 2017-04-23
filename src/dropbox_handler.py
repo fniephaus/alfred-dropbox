@@ -1,8 +1,8 @@
 import json
 import os
+import subprocess
 import sys
 import webbrowser
-from AppKit import NSPasteboard, NSArray
 
 import config
 
@@ -50,18 +50,18 @@ def main(wf):
     return 0
 
 
+def copy_to_clipboard(text):
+    p = subprocess.Popen(['pbcopy', 'w'],
+                         stdin=subprocess.PIPE, close_fds=True)
+    p.communicate(input=text.encode('utf-8'))
+
+
 def share_path(path, access_token):
     api_client = client.DropboxClient(access_token)
     try:
-        url = api_client.share(path)['url']
-
-        pb = NSPasteboard.generalPasteboard()
-        pb.clearContents()
-        a = NSArray.arrayWithObject_(url)
-        pb.writeObjects_(a)
-
+        url = api_client.share(path)
+        copy_to_clipboard(url)
         print 'Link copied to clipboard'
-
     except rest.ErrorResponse, e:
         print (e.user_error_msg or str(e))
 
