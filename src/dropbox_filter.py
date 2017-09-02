@@ -13,8 +13,7 @@ from workflow.background import run_in_background
 
 def main(wf):
     if wf.update_available:
-        subtitle = 'New: %s' % wf.update_info['body']
-        wf.add_item("An update is available!", subtitle,
+        wf.add_item("An update is available!",
                     autocomplete='workflow:update', valid=False)
 
     user_input = wf.args[0]
